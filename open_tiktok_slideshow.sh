@@ -41,6 +41,11 @@ for n in nodes:
 "
     echo "[$device] === END UI DUMP ==="
 
+    # Scroll once in the grid
+    echo "[$device] Scrolling grid once"
+    adb -s "$device" shell input swipe $cx $((h * 3 / 4)) $cx $((h / 4)) 400
+    sleep 2
+
     # Tap into the first video (top-left cell of the grid)
     tap_x=$((w / 6))
     tap_y=$((h / 4))
