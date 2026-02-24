@@ -18,11 +18,16 @@ run_on_device() {
     cx=$((w / 2))
     cy=$((h / 2))
 
-    # TikTok like button: right side of screen (~92% width), ~60% height
-    like_x=$((w * 92 / 100))
-    like_y=$((h * 60 / 100))
+    # Grid: 2 columns. Left cell center x = (11+535)/2 = 273, y = (471+1546)/2 = 1008
+    grid_tap_x=273
+    grid_tap_y=1008
 
-    echo "[$device] Screen: ${w}x${h} — Like button at ($like_x, $like_y)"
+    # TikTok video player like button: right side ~92% width, ~58% height
+    like_x=$((w * 92 / 100))
+    like_y=$((h * 58 / 100))
+
+    echo "[$device] Screen: ${w}x${h}"
+    echo "[$device] Grid tap: ($grid_tap_x, $grid_tap_y) | Like tap: ($like_x, $like_y)"
 
     echo "[$device] Opening TikTok #slideshow search"
     adb -s "$device" shell am start -a android.intent.action.VIEW \
@@ -34,16 +39,14 @@ run_on_device() {
     adb -s "$device" shell input swipe $cx $((h * 3 / 4)) $cx $((h / 4)) 400
     sleep 2
 
-    # Tap first video (top-left cell of the grid)
-    tap_x=$((w / 6))
-    tap_y=$((h / 4))
-    echo "[$device] Tapping first grid item at ($tap_x, $tap_y)"
-    adb -s "$device" shell input tap $tap_x $tap_y
+    # Tap center of first grid cell to open video
+    echo "[$device] Tapping grid cell at ($grid_tap_x, $grid_tap_y)"
+    adb -s "$device" shell input tap $grid_tap_x $grid_tap_y
     sleep 3
 
     # Like loop
     for i in $(seq 1 $LIKE_COUNT); do
-        echo "[$device] Post $i/$LIKE_COUNT — liking at ($like_x, $like_y)"
+        echo "[$device] Post $i/$LIKE_COUNT — tapping like at ($like_x, $like_y)"
         adb -s "$device" shell input tap "$like_x" "$like_y"
         sleep $SCROLL_DELAY
 
@@ -52,7 +55,7 @@ run_on_device() {
         sleep $SCROLL_DELAY
     done
 
-    echo "[$device] Done — liked $LIKE_COUNT posts"
+    echo "[$device] Done — $LIKE_COUNT posts processed"
 }
 
 for device in $devices; do
