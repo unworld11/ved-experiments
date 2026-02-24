@@ -22,9 +22,10 @@ run_on_device() {
     grid_tap_x=273
     grid_tap_y=1008
 
-    # TikTok video player like button: right side ~92% width, ~58% height
+    # TikTok video player like button: right side ~92% width, ~50% height
+    # Comment button is at ~60%, so stay well above it
     like_x=$((w * 92 / 100))
-    like_y=$((h * 58 / 100))
+    like_y=$((h * 50 / 100))
 
     echo "[$device] Screen: ${w}x${h}"
     echo "[$device] Grid tap: ($grid_tap_x, $grid_tap_y) | Like tap: ($like_x, $like_y)"
@@ -50,9 +51,9 @@ run_on_device() {
         adb -s "$device" shell input tap "$like_x" "$like_y"
         sleep $SCROLL_DELAY
 
-        # Swipe up to next video — left side, start from center to avoid comment sheet trigger zone
+        # Swipe up to next video — left side (30%), start at 40% height (above comment zone)
         swipe_x=$((w * 30 / 100))
-        adb -s "$device" shell input swipe $swipe_x $cy $swipe_x $((h / 5)) 300
+        adb -s "$device" shell input swipe $swipe_x $((h * 40 / 100)) $swipe_x $((h * 10 / 100)) 250
         sleep $SCROLL_DELAY
     done
 
