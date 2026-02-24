@@ -50,9 +50,9 @@ run_on_device() {
         adb -s "$device" shell input tap "$like_x" "$like_y"
         sleep $SCROLL_DELAY
 
-        # Swipe up to next video — use left side (30% width) to avoid right sidebar buttons
+        # Swipe up to next video — left side, start from center to avoid comment sheet trigger zone
         swipe_x=$((w * 30 / 100))
-        adb -s "$device" shell input swipe $swipe_x $((h * 3 / 4)) $swipe_x $((h / 4)) 400
+        adb -s "$device" shell input swipe $swipe_x $cy $swipe_x $((h / 5)) 300
         sleep $SCROLL_DELAY
     done
 
