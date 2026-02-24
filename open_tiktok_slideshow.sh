@@ -36,7 +36,7 @@ run_on_device() {
 
     # Scroll once in the grid
     echo "[$device] Scrolling grid once"
-    adb -s "$device" shell input swipe $cx $((h * 3 / 4)) $cx $((h / 4)) 400
+    adb -s "$device" shell input swipe $cx $((h * 3 / 4)) $cx $((h / 4)) 600
     sleep 2
 
     # Tap center of first grid cell to open video
@@ -50,8 +50,9 @@ run_on_device() {
         adb -s "$device" shell input tap "$like_x" "$like_y"
         sleep $SCROLL_DELAY
 
-        # Swipe up to next video
-        adb -s "$device" shell input swipe $cx $((h * 3 / 4)) $cx $((h / 4)) 400
+        # Swipe up to next video — use left side (30% width) to avoid right sidebar buttons
+        swipe_x=$((w * 30 / 100))
+        adb -s "$device" shell input swipe $swipe_x $((h * 3 / 4)) $swipe_x $((h / 4)) 400
         sleep $SCROLL_DELAY
     done
 
