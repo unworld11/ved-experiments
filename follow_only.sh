@@ -92,13 +92,14 @@ for node in re.findall(r'<node[^>]*>', xml):
     bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
     if not bounds:
         continue
-    d = desc.group(1) if desc else ''
     t = text.group(1) if text else ''
-    # Video player: follow button has desc like 'Subscribe to @username'
-    # Profile page text label: text='Subscription' (but overlapped — kept as fallback)
-    if re.search(r'\bSubscri', d, re.I) or t == 'Subscription':
+    # The profile stats row (following / followers / likes) shows as plain numbers.
+    # The follow button is ~1cm (150px) below the bottom of that stats row.
+    # This puts it well below the profile-photo overlay (id=o2p y=80-226).
+    if re.match(r'^\d+[KMBkmb]?$', t):
         x1, y1, x2, y2 = map(int, bounds.groups())
-        print(f'{(x1+x2)//2} {(y1+y2)//2}')
+        follow_y = y2 + 150   # ~1cm below the stats numbers
+        print(f'540 {follow_y}')
         break
 "
 }
@@ -141,13 +142,6 @@ follow_only_account() {
     adb -s "$device" shell am start -a android.intent.action.VIEW \
         -d "https://www.tiktok.com/@$username"
     sleep 4
-
-    # The profile page has a fixed overlay (FrameLayout id=o2a) that sits on top of
-    # the Follow button and intercepts all taps. Fix: tap the first video thumbnail
-    # to enter the video player where the Follow/Subscribe button has no overlay.
-    echo "[$device] Tapping first video to open video player (bypasses profile overlay)..."
-    adb -s "$device" shell input tap 179 461
-    sleep 3
 
     dump_ui_elements "$device"
 
