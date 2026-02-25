@@ -145,6 +145,11 @@ follow_only_account() {
         -d "https://www.tiktok.com/@$username"
     sleep 4
 
+    # Scroll the profile down so the profile photo header slides away
+    # and TikTok shows a compact sticky header with just the Follow button (no overlay)
+    adb -s "$device" shell input swipe 540 900 540 500 400
+    sleep 1
+
     dump_ui_elements "$device"
 
     already=$(is_already_following "$device")
