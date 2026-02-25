@@ -110,20 +110,26 @@ dump_ui_elements() {
 import sys, re
 xml = sys.stdin.read()
 print(f'Total XML length: {len(xml)} chars')
-print('--- ALL CLICKABLE ELEMENTS ---')
+print('--- ALL ELEMENTS (top 300px of screen) ---')
 for node in re.findall(r'<node[^>]*>', xml):
-    clickable = re.search(r'clickable=\"(true|false)\"', node)
-    if not clickable or clickable.group(1) != 'true':
+    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
+    if not bounds:
         continue
-    desc   = re.search(r'content-desc=\"([^\"]+)\"', node)
-    text   = re.search(r' text=\"([^\"]+)\"', node)
-    cls    = re.search(r'class=\"([^\"]+)\"', node)
-    bounds = re.search(r'bounds=\"([^\"]+)\"', node)
+    y1 = int(bounds.group(2))
+    if y1 > 300:
+        continue
+    desc    = re.search(r'content-desc=\"([^\"]+)\"', node)
+    text    = re.search(r' text=\"([^\"]+)\"', node)
+    cls     = re.search(r'class=\"([^\"]+)\"', node)
+    rid     = re.search(r'resource-id=\"([^\"]+)\"', node)
+    clk     = re.search(r'clickable=\"(true|false)\"', node)
     d = desc.group(1) if desc else ''
     t = text.group(1) if text else ''
     c = cls.group(1).split('.')[-1] if cls else ''
-    b = bounds.group(1) if bounds else ''
-    print(f'  {c:<25} desc={d:<40} text={t:<30} bounds={b}')
+    r = rid.group(1).split('/')[-1] if rid else ''
+    k = clk.group(1) if clk else '?'
+    b = bounds.group(0).replace('bounds=','')
+    print(f'  {c:<22} id={r:<35} clk={k} desc={d:<30} text={t:<20} {b}')
 "
     echo "[$device] === END UI DUMP ==="
 }
