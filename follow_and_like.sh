@@ -33,10 +33,10 @@ process_account() {
 
     echo "[$device] ── Processing @$username ──"
 
-    # Open profile via deep link
+    # Open profile — TikTok intercepts its own web URLs and opens the right profile
     echo "[$device] Opening profile: @$username"
     adb -s "$device" shell am start -a android.intent.action.VIEW \
-        -d "snssdk1233://user/profile?uniqueId=$username"
+        -d "https://www.tiktok.com/@$username"
     sleep 4
 
     # Tap Follow button (center x, ~26% height — below avatar/stats, above tabs)
