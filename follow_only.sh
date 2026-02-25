@@ -92,12 +92,10 @@ for node in re.findall(r'<node[^>]*>', xml):
     bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
     if not bounds:
         continue
-    d = desc.group(1) if desc else ''
     t = text.group(1) if text else ''
-    val = d or t
-    # TikTok labels the Follow button as 'Subscription' (not yet following)
-    # When already following it shows 'Following', 'Friends', or 'Subscribed'
-    if re.match(r'^Subscription$', val, re.I):
+    # Match on text only — the ImageView avatar also has desc=Subscription
+    # but the actual button is a TextView with text=Subscription
+    if t == 'Subscription':
         x1, y1, x2, y2 = map(int, bounds.groups())
         print(f'{(x1+x2)//2} {(y1+y2)//2}')
         break
