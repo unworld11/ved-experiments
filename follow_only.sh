@@ -70,7 +70,8 @@ is_already_following() {
     adb -s "$device" shell cat /sdcard/ui_dump.xml | python3 -c "
 import sys, re
 xml = sys.stdin.read()
-if re.search(r'(Following|Friends|Subscribed)', xml, re.IGNORECASE):
+# 'Subscription' = not yet following. 'Following'/'Friends'/'Subscribed' = already following.
+if re.search(r'\b(Following|Friends|Subscribed)\b', xml, re.IGNORECASE):
     print('yes')
 else:
     print('no')
@@ -94,8 +95,9 @@ for node in re.findall(r'<node[^>]*>', xml):
     d = desc.group(1) if desc else ''
     t = text.group(1) if text else ''
     val = d or t
-    # Match 'Follow' or 'Follow <username>' but NOT Following/Friends/Subscribed
-    if re.match(r'^Follow(\s|$)', val, re.I) and not re.search(r'Following|Friends|Subscribed', val, re.I):
+    # TikTok labels the Follow button as 'Subscription' (not yet following)
+    # When already following it shows 'Following', 'Friends', or 'Subscribed'
+    if re.match(r'^Subscription$', val, re.I):
         x1, y1, x2, y2 = map(int, bounds.groups())
         print(f'{(x1+x2)//2} {(y1+y2)//2}')
         break
