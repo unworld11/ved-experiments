@@ -99,7 +99,8 @@ for node in re.findall(r'<node[^>]*>', xml):
     if re.match(r'^\d+[KMBkmb]?$', t):
         x1, y1, x2, y2 = map(int, bounds.groups())
         follow_y = y2 + 150   # ~1cm below the stats numbers
-        print(f'540 {follow_y}')
+        follow_x = 540 - 150  # ~1cm left of center
+        print(f'{follow_x} {follow_y}')
         break
 "
 }
