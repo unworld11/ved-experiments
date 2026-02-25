@@ -104,34 +104,6 @@ for node in re.findall(r'<node[^>]*>', xml):
 "
 }
 
-dump_ui_elements() {
-    local device=$1
-    echo "[$device] === UI DUMP ==="
-    adb -s "$device" shell uiautomator dump /sdcard/ui_dump.xml > /dev/null 2>&1
-    adb -s "$device" shell cat /sdcard/ui_dump.xml | python3 -c "
-import sys, re
-xml = sys.stdin.read()
-print(f'Total XML length: {len(xml)} chars')
-print('--- ELEMENTS WITH TEXT/DESC OR CLICKABLE ---')
-for node in re.findall(r'<node[^>]*>', xml):
-    desc    = re.search(r'content-desc=\"([^\"]+)\"', node)
-    text    = re.search(r' text=\"([^\"]+)\"', node)
-    cls     = re.search(r'class=\"([^\"]+)\"', node)
-    rid     = re.search(r'resource-id=\"([^\"]+)\"', node)
-    clk     = re.search(r'clickable=\"(true|false)\"', node)
-    bounds  = re.search(r'bounds=\"([^\"]+)\"', node)
-    d = desc.group(1) if desc else ''
-    t = text.group(1) if text else ''
-    c = cls.group(1).split('.')[-1] if cls else ''
-    r = rid.group(1).split('/')[-1] if rid else ''
-    k = clk.group(1) if clk else '?'
-    b = bounds.group(1) if bounds else ''
-    if d or t or k == 'true':
-        print(f'  {c:<22} id={r:<30} clk={k} desc={d:<35} text={t:<25} {b}')
-"
-    echo "[$device] === END UI DUMP ==="
-}
-
 follow_only_account() {
     local device=$1
     local username=$2
@@ -142,8 +114,6 @@ follow_only_account() {
     adb -s "$device" shell am start -a android.intent.action.VIEW \
         -d "https://www.tiktok.com/@$username"
     sleep 4
-
-    dump_ui_elements "$device"
 
     already=$(is_already_following "$device")
     if [ "$already" = "yes" ]; then
