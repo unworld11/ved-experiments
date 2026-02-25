@@ -22,13 +22,12 @@ run_on_device() {
     grid_tap_x=273
     grid_tap_y=1008
 
-    # TikTok video player like button: right side ~92% width, ~50% height
-    # Comment button is at ~60%, so stay well above it
-    like_x=$((w * 92 / 100))
-    like_y=$((h * 50 / 100))
+    # Double-tap center-left of video to like (avoids right sidebar buttons)
+    dtap_x=$((w * 35 / 100))
+    dtap_y=$((h * 45 / 100))
 
     echo "[$device] Screen: ${w}x${h}"
-    echo "[$device] Grid tap: ($grid_tap_x, $grid_tap_y) | Like tap: ($like_x, $like_y)"
+    echo "[$device] Grid tap: ($grid_tap_x, $grid_tap_y) | Double-tap like: ($dtap_x, $dtap_y)"
 
     echo "[$device] Opening TikTok #slideshow search"
     adb -s "$device" shell am start -a android.intent.action.VIEW \
@@ -45,14 +44,16 @@ run_on_device() {
     adb -s "$device" shell input tap $grid_tap_x $grid_tap_y
     sleep 3
 
-    # Like loop
+    # Like loop — double-tap to like, swipe left side to next video
+    swipe_x=$((w * 30 / 100))
     for i in $(seq 1 $LIKE_COUNT); do
-        echo "[$device] Post $i/$LIKE_COUNT — tapping like at ($like_x, $like_y)"
-        adb -s "$device" shell input tap "$like_x" "$like_y"
+        echo "[$device] Post $i/$LIKE_COUNT — double-tapping to like"
+        adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
+        sleep 0.1
+        adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
         sleep $SCROLL_DELAY
 
-        # Swipe up to next video — left side (30%), start at 40% height (above comment zone)
-        swipe_x=$((w * 30 / 100))
+        # Swipe up — left side (30%), from 40% to 10% height
         adb -s "$device" shell input swipe $swipe_x $((h * 40 / 100)) $swipe_x $((h * 10 / 100)) 250
         sleep $SCROLL_DELAY
     done

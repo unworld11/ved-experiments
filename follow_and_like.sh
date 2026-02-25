@@ -8,7 +8,7 @@ ACCOUNTS=(
     "userwealthrich"
 )
 
-LIKE_COUNT=${1:-30}
+LIKE_COUNT=${1:-5}
 SCROLL_DELAY=2
 
 devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
@@ -22,9 +22,9 @@ process_account() {
     h=$(echo "$size" | cut -dx -f2)
     cx=$((w / 2))
 
-    # Like button: right side ~92% width, ~50% height
-    like_x=$((w * 92 / 100))
-    like_y=$((h * 50 / 100))
+    # Double-tap center-left of video to like (avoids right sidebar buttons)
+    dtap_x=$((w * 35 / 100))
+    dtap_y=$((h * 45 / 100))
 
     # Swipe: left side (30%), from 40% to 10% height
     swipe_x=$((w * 30 / 100))
@@ -60,10 +60,33 @@ process_account() {
     adb -s "$device" shell input tap "$first_post_x" "$first_post_y"
     sleep 3
 
-    # Like loop
+    # --- DEBUG: UI dump after opening first post ---
+    echo "[$device] === UI DUMP (profile video player) ==="
+    adb -s "$device" shell uiautomator dump /sdcard/ui_dump.xml > /dev/null 2>&1
+    adb -s "$device" shell cat /sdcard/ui_dump.xml | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+print(f'xml length: {len(xml)} chars')
+for n in re.findall(r'<node[^>]*>', xml):
+    cls  = re.search(r'class=\"([^\"]+)\"', n)
+    desc = re.search(r'content-desc=\"([^\"]+)\"', n)
+    text = re.search(r' text=\"([^\"]+)\"', n)
+    clk  = re.search(r'clickable=\"(true|false)\"', n)
+    bnd  = re.search(r'bounds=\"([^\"]+)\"', n)
+    if cls and bnd and (desc or text):
+        d = desc.group(1) if desc else ''
+        t = text.group(1) if text else ''
+        if d or t:
+            print(f'  {cls.group(1).split(\".\")[-1]:<20} desc={d:<30} text={t:<20} click={clk.group(1) if clk else \"?\"} bounds={bnd.group(1)}')
+"
+    echo "[$device] === END UI DUMP ==="
+
+    # Like loop — double-tap to like
     for i in $(seq 1 $LIKE_COUNT); do
-        echo "[$device] @$username — liking post $i/$LIKE_COUNT"
-        adb -s "$device" shell input tap "$like_x" "$like_y"
+        echo "[$device] @$username — double-tapping to like post $i/$LIKE_COUNT"
+        adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
+        sleep 0.1
+        adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
         sleep $SCROLL_DELAY
 
         adb -s "$device" shell input swipe $swipe_x $swipe_from $swipe_x $swipe_to 250
