@@ -92,10 +92,11 @@ for node in re.findall(r'<node[^>]*>', xml):
     bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
     if not bounds:
         continue
+    d = desc.group(1) if desc else ''
     t = text.group(1) if text else ''
-    # Match on text only — the ImageView avatar also has desc=Subscription
-    # but the actual button is a TextView with text=Subscription
-    if t == 'Subscription':
+    # Video player: follow button has desc like 'Subscribe to @username'
+    # Profile page text label: text='Subscription' (but overlapped — kept as fallback)
+    if re.search(r'\bSubscri', d, re.I) or t == 'Subscription':
         x1, y1, x2, y2 = map(int, bounds.groups())
         print(f'{(x1+x2)//2} {(y1+y2)//2}')
         break
@@ -110,26 +111,22 @@ dump_ui_elements() {
 import sys, re
 xml = sys.stdin.read()
 print(f'Total XML length: {len(xml)} chars')
-print('--- ALL ELEMENTS (top 300px of screen) ---')
+print('--- ELEMENTS WITH TEXT/DESC OR CLICKABLE ---')
 for node in re.findall(r'<node[^>]*>', xml):
-    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
-    if not bounds:
-        continue
-    y1 = int(bounds.group(2))
-    if y1 > 300:
-        continue
     desc    = re.search(r'content-desc=\"([^\"]+)\"', node)
     text    = re.search(r' text=\"([^\"]+)\"', node)
     cls     = re.search(r'class=\"([^\"]+)\"', node)
     rid     = re.search(r'resource-id=\"([^\"]+)\"', node)
     clk     = re.search(r'clickable=\"(true|false)\"', node)
+    bounds  = re.search(r'bounds=\"([^\"]+)\"', node)
     d = desc.group(1) if desc else ''
     t = text.group(1) if text else ''
     c = cls.group(1).split('.')[-1] if cls else ''
     r = rid.group(1).split('/')[-1] if rid else ''
     k = clk.group(1) if clk else '?'
-    b = bounds.group(0).replace('bounds=','')
-    print(f'  {c:<22} id={r:<35} clk={k} desc={d:<30} text={t:<20} {b}')
+    b = bounds.group(1) if bounds else ''
+    if d or t or k == 'true':
+        print(f'  {c:<22} id={r:<30} clk={k} desc={d:<35} text={t:<25} {b}')
 "
     echo "[$device] === END UI DUMP ==="
 }
@@ -145,10 +142,12 @@ follow_only_account() {
         -d "https://www.tiktok.com/@$username"
     sleep 4
 
-    # Scroll the profile down so the profile photo header slides away
-    # and TikTok shows a compact sticky header with just the Follow button (no overlay)
-    adb -s "$device" shell input swipe 540 900 540 500 400
-    sleep 1
+    # The profile page has a fixed overlay (FrameLayout id=o2a) that sits on top of
+    # the Follow button and intercepts all taps. Fix: tap the first video thumbnail
+    # to enter the video player where the Follow/Subscribe button has no overlay.
+    echo "[$device] Tapping first video to open video player (bypasses profile overlay)..."
+    adb -s "$device" shell input tap 179 461
+    sleep 3
 
     dump_ui_elements "$device"
 
