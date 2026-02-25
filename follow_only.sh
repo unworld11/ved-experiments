@@ -110,7 +110,11 @@ dump_ui_elements() {
 import sys, re
 xml = sys.stdin.read()
 print(f'Total XML length: {len(xml)} chars')
+print('--- ALL CLICKABLE ELEMENTS ---')
 for node in re.findall(r'<node[^>]*>', xml):
+    clickable = re.search(r'clickable=\"(true|false)\"', node)
+    if not clickable or clickable.group(1) != 'true':
+        continue
     desc   = re.search(r'content-desc=\"([^\"]+)\"', node)
     text   = re.search(r' text=\"([^\"]+)\"', node)
     cls    = re.search(r'class=\"([^\"]+)\"', node)
@@ -119,8 +123,7 @@ for node in re.findall(r'<node[^>]*>', xml):
     t = text.group(1) if text else ''
     c = cls.group(1).split('.')[-1] if cls else ''
     b = bounds.group(1) if bounds else ''
-    if d or t:
-        print(f'  {c:<25} desc={d:<40} text={t:<30} bounds={b}')
+    print(f'  {c:<25} desc={d:<40} text={t:<30} bounds={b}')
 "
     echo "[$device] === END UI DUMP ==="
 }
