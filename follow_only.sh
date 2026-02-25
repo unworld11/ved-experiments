@@ -6,11 +6,10 @@
 # Usage: ./follow_only.sh
 
 ACCOUNTS=(
-    "gamingarb01"
-    # "evan_argy"
-    # "aelus.12"
-    # "waste.collector"
-    # "mr._.javiidon"
+    "evan_argy"
+    "aelus.12"
+    "waste.collector"
+    "mr._.javiidon"
 )
 
 # Portugal Content — short video/share links
