@@ -9,6 +9,20 @@ SCROLL_DELAY=2
 
 devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 
+wake_device() {
+    local device=$1
+    # Check if screen is off
+    screen=$(adb -s "$device" shell dumpsys power | grep 'Display Power' | grep -o 'state=[A-Z]*' | cut -d= -f2)
+    if [ "$screen" != "ON" ]; then
+        echo "[$device] Waking up screen"
+        adb -s "$device" shell input keyevent KEYCODE_WAKEUP
+        sleep 1
+    fi
+    # Swipe up to dismiss lock screen
+    adb -s "$device" shell input swipe 540 1800 540 900 300
+    sleep 1
+}
+
 run_on_device() {
     local device=$1
 
@@ -28,6 +42,8 @@ run_on_device() {
 
     echo "[$device] Screen: ${w}x${h}"
     echo "[$device] Grid tap: ($grid_tap_x, $grid_tap_y) | Double-tap like: ($dtap_x, $dtap_y)"
+
+    wake_device "$device"
 
     echo "[$device] Opening TikTok #slideshow search"
     adb -s "$device" shell am start -a android.intent.action.VIEW \

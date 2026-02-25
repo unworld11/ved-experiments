@@ -13,6 +13,19 @@ SCROLL_DELAY=2
 
 devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 
+wake_device() {
+    local device=$1
+    screen=$(adb -s "$device" shell dumpsys power | grep 'Display Power' | grep -o 'state=[A-Z]*' | cut -d= -f2)
+    if [ "$screen" != "ON" ]; then
+        echo "[$device] Waking up screen"
+        adb -s "$device" shell input keyevent KEYCODE_WAKEUP
+        sleep 1
+    fi
+    # Swipe up to dismiss lock screen
+    adb -s "$device" shell input swipe 540 1800 540 900 300
+    sleep 1
+}
+
 dump_ui() {
     local device=$1
     local label=$2
@@ -84,6 +97,8 @@ process_account() {
     swipe_to=$((h * 10 / 100))
 
     echo "[$device] ── Processing @$username ──"
+
+    wake_device "$device"
 
     # Open profile
     echo "[$device] Opening profile: @$username"
