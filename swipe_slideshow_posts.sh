@@ -21,9 +21,9 @@ wake_device() {
         echo "[$device] Waking up screen"
         adb -s "$device" shell input keyevent KEYCODE_WAKEUP
         sleep 1
+        adb -s "$device" shell input swipe 540 1800 540 900 300
+        sleep 1
     fi
-    adb -s "$device" shell input swipe 540 1800 540 900 300
-    sleep 1
 }
 
 dump_ui() {
@@ -32,47 +32,34 @@ dump_ui() {
     adb -s "$device" shell cat /sdcard/ui_dump.xml
 }
 
-# Returns "x y" for the Videos/Posts tab, or empty if not found.
-get_videos_tab_coords() {
-    local device=$1
-    dump_ui "$device" | python3 -c "
-import sys, re
-xml = sys.stdin.read()
-for node in re.findall(r'<node[^>]*>', xml):
-    text   = re.search(r' text=\"([^\"]+)\"', node)
-    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
-    if not text or not bounds:
-        continue
-    if text.group(1) in ('Videos', 'Posts'):
-        x1,y1,x2,y2 = map(int, bounds.groups())
-        print((x1+x2)//2, (y1+y2)//2)
-        break
-"
-}
-
-# Returns "x y" for the first post in the grid (roughly square clickable
-# element below the tab bar), or empty if not found.
+# Returns "x y" for the first post thumbnail in the grid.
+# Looks for the topmost roughly-square image in the bottom half of the screen.
+# Falls back to w/6, h*0.6 if nothing is found.
 get_first_post_coords() {
     local device=$1
+    local sw=$2   # screen width
+    local sh=$3   # screen height
     dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
+sw, sh = $sw, $sh
+half_y = sh // 2
 candidates = []
 for node in re.findall(r'<node[^>]*>', xml):
-    if 'clickable=\"true\"' not in node:
-        continue
     bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
     if not bounds:
         continue
     x1,y1,x2,y2 = map(int, bounds.groups())
-    w, h = x2-x1, y2-y1
-    # Grid cells are roughly square (±30%), at least 100px wide, and
-    # below the profile header / tab row.
-    if w >= 100 and h >= 100 and abs(w-h) < max(w,h)*0.3 and y1 > 300:
+    bw, bh = x2-x1, y2-y1
+    # Grid thumbnails are roughly square, >= 80px, in the bottom half
+    if bw >= 80 and bh >= 80 and abs(bw-bh) < max(bw,bh)*0.4 and y1 >= half_y:
         candidates.append((y1, x1, (x1+x2)//2, (y1+y2)//2))
 if candidates:
     candidates.sort()
     print(candidates[0][2], candidates[0][3])
+else:
+    # Fallback: first column centre, 60% down the screen
+    print(sw//6, int(sh*0.60))
 "
 }
 
@@ -124,24 +111,8 @@ run_on_device() {
         -d "https://www.tiktok.com/@$ACCOUNT"
     sleep 5
 
-    echo "[$device] Finding Videos tab..."
-    tab_coords=$(get_videos_tab_coords "$device")
-    if [ -z "$tab_coords" ]; then
-        echo "[$device] ERROR: Could not find Videos tab in UI — aborting"
-        return 1
-    fi
-    tab_x=$(echo "$tab_coords" | awk '{print $1}')
-    tab_y=$(echo "$tab_coords" | awk '{print $2}')
-    echo "[$device] Tapping Videos tab at ($tab_x, $tab_y)"
-    adb -s "$device" shell input tap "$tab_x" "$tab_y"
-    sleep 3
-
     echo "[$device] Finding first post in grid..."
-    post_coords=$(get_first_post_coords "$device")
-    if [ -z "$post_coords" ]; then
-        echo "[$device] ERROR: Could not find first post in grid — aborting"
-        return 1
-    fi
+    post_coords=$(get_first_post_coords "$device" "$w" "$h")
     post_x=$(echo "$post_coords" | awk '{print $1}')
     post_y=$(echo "$post_coords" | awk '{print $2}')
     echo "[$device] Tapping first post at ($post_x, $post_y)"
