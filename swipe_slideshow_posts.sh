@@ -6,7 +6,10 @@
 # (no hardcoded screen coords) so it works across device sizes.
 # Usage: ./swipe_slideshow_posts.sh [number_of_posts]
 
-ACCOUNT="gamingarb01"
+ACCOUNTS=(
+    "gamingarb01"
+    "userwealthrich"
+)
 POST_COUNT=${1:-10}
 MAX_SLIDES=5        # max slides to swipe through per slideshow
 SLIDE_PAUSE_MIN=1   # min seconds per slide
@@ -107,52 +110,55 @@ run_on_device() {
     echo "[$device] Screen: ${w}x${h}"
     wake_device "$device"
 
-    echo "[$device] Opening @$ACCOUNT"
-    adb -s "$device" shell am start -a android.intent.action.VIEW \
-        -d "https://www.tiktok.com/@$ACCOUNT"
-    sleep 5
+    for account in "${ACCOUNTS[@]}"; do
+        echo "[$device] ═══ Opening @$account ═══"
+        adb -s "$device" shell am start -a android.intent.action.VIEW \
+            -d "https://www.tiktok.com/@$account"
+        sleep 5
 
-    echo "[$device] Finding first post in grid..."
-    post_coords=$(get_first_post_coords "$device" "$w" "$h")
-    post_x=$(echo "$post_coords" | awk '{print $1}')
-    post_y=$(echo "$post_coords" | awk '{print $2}')
-    echo "[$device] Tapping first post at ($post_x, $post_y)"
-    adb -s "$device" shell input tap "$post_x" "$post_y"
-    sleep 3
+        echo "[$device] Finding first post in grid..."
+        post_coords=$(get_first_post_coords "$device" "$w" "$h")
+        post_x=$(echo "$post_coords" | awk '{print $1}')
+        post_y=$(echo "$post_coords" | awk '{print $2}')
+        echo "[$device] Tapping first post at ($post_x, $post_y)"
+        adb -s "$device" shell input tap "$post_x" "$post_y"
+        sleep 3
 
-    for i in $(seq 1 "$POST_COUNT"); do
-        echo "[$device] ── Post $i/$POST_COUNT ──"
-        sleep 1
+        for i in $(seq 1 "$POST_COUNT"); do
+            echo "[$device] ── @$account Post $i/$POST_COUNT ──"
+            sleep 1
 
-        slideshow=$(is_slideshow "$device")
+            slideshow=$(is_slideshow "$device")
 
-        if [ "$slideshow" = "yes" ]; then
-            echo "[$device] Slideshow detected — swiping through up to $MAX_SLIDES slides"
-            rand_sleep $SLIDE_PAUSE_MIN $SLIDE_PAUSE_MAX
-            for s in $(seq 2 "$MAX_SLIDES"); do
-                echo "[$device]   → Slide $s"
-                adb -s "$device" shell input swipe \
-                    "$slide_start_x" "$cy" "$slide_end_x" "$cy" 250
-                sleep 1
+            if [ "$slideshow" = "yes" ]; then
+                echo "[$device] Slideshow detected — swiping through up to $MAX_SLIDES slides"
                 rand_sleep $SLIDE_PAUSE_MIN $SLIDE_PAUSE_MAX
-            done
-        else
-            echo "[$device] Regular video — watching"
+                for s in $(seq 2 "$MAX_SLIDES"); do
+                    echo "[$device]   → Slide $s"
+                    adb -s "$device" shell input swipe \
+                        "$slide_start_x" "$cy" "$slide_end_x" "$cy" 250
+                    sleep 1
+                    rand_sleep $SLIDE_PAUSE_MIN $SLIDE_PAUSE_MAX
+                done
+            else
+                echo "[$device] Regular video — watching"
+                sleep $SCROLL_DELAY
+            fi
+
+            echo "[$device] Liking"
+            adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
+            sleep 0.1
+            adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
             sleep $SCROLL_DELAY
-        fi
 
-        echo "[$device] Liking"
-        adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
-        sleep 0.1
-        adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
-        sleep $SCROLL_DELAY
+            echo "[$device] Next post"
+            adb -s "$device" shell input swipe "$cx" "$next_post_from" "$cx" "$next_post_to" 250
+            sleep $SCROLL_DELAY
+        done
 
-        echo "[$device] Next post"
-        adb -s "$device" shell input swipe "$cx" "$next_post_from" "$cx" "$next_post_to" 250
-        sleep $SCROLL_DELAY
+        echo "[$device] Done with @$account — $POST_COUNT posts processed"
+        sleep 2
     done
-
-    echo "[$device] Done — $POST_COUNT posts processed for @$ACCOUNT"
 }
 
 for device in $devices; do
