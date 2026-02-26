@@ -8,6 +8,7 @@
 
 ACCOUNT="gamingarb01"
 POST_COUNT=${1:-10}
+MAX_SLIDES=5        # max slides to swipe through per slideshow
 SLIDE_PAUSE_MIN=1   # min seconds per slide
 SLIDE_PAUSE_MAX=3   # max seconds per slide
 SCROLL_DELAY=2
@@ -63,26 +64,17 @@ else:
 "
 }
 
-# Returns the total slide count from a visible counter like "1/5", else 0.
-# Also prints any text/content-desc values found for debugging.
-get_slide_count() {
+# Returns "yes" if the current post is a photo slideshow, "no" otherwise.
+# TikTok marks slideshows with a "Photo" label on screen.
+is_slideshow() {
     local device=$1
     dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
-
-# Check both text and content-desc for a slide counter (e.g. '1/5', '2 / 10')
-counter = re.search(r'(?:text|content-desc)=\"(\d+)\s*/\s*(\d+)\"', xml)
-if counter:
-    print(counter.group(2))
-    sys.exit()
-
-# Dump all visible text/content-desc for debugging
-texts = re.findall(r' text=\"([^\"]+)\"', xml)
-descs = re.findall(r'content-desc=\"([^\"]+)\"', xml)
-print(0)
-print('DEBUG texts:', texts[:30], file=sys.stderr)
-print('DEBUG descs:', descs[:30], file=sys.stderr)
+if re.search(r' text=\"Photo\"', xml):
+    print('yes')
+else:
+    print('no')
 "
 }
 
@@ -132,13 +124,13 @@ run_on_device() {
         echo "[$device] ── Post $i/$POST_COUNT ──"
         sleep 1
 
-        slide_count=$(get_slide_count "$device")
+        slideshow=$(is_slideshow "$device")
 
-        if [ "$slide_count" -gt 1 ] 2>/dev/null; then
-            echo "[$device] Slideshow — $slide_count slides"
+        if [ "$slideshow" = "yes" ]; then
+            echo "[$device] Slideshow detected — swiping through up to $MAX_SLIDES slides"
             rand_sleep $SLIDE_PAUSE_MIN $SLIDE_PAUSE_MAX
-            for s in $(seq 2 "$slide_count"); do
-                echo "[$device]   → Slide $s/$slide_count"
+            for s in $(seq 2 "$MAX_SLIDES"); do
+                echo "[$device]   → Slide $s"
                 adb -s "$device" shell input swipe \
                     "$slide_start_x" "$cy" "$slide_end_x" "$cy" 250
                 sleep 1
