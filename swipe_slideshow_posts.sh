@@ -64,16 +64,25 @@ else:
 }
 
 # Returns the total slide count from a visible counter like "1/5", else 0.
+# Also prints any text/content-desc values found for debugging.
 get_slide_count() {
     local device=$1
     dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
-m = re.search(r' text=\"(\d+)/(\d+)\"', xml)
-if m:
-    print(m.group(2))
-else:
-    print(0)
+
+# Check both text and content-desc for a slide counter (e.g. '1/5', '2 / 10')
+counter = re.search(r'(?:text|content-desc)=\"(\d+)\s*/\s*(\d+)\"', xml)
+if counter:
+    print(counter.group(2))
+    sys.exit()
+
+# Dump all visible text/content-desc for debugging
+texts = re.findall(r' text=\"([^\"]+)\"', xml)
+descs = re.findall(r'content-desc=\"([^\"]+)\"', xml)
+print(0)
+print('DEBUG texts:', texts[:30], file=sys.stderr)
+print('DEBUG descs:', descs[:30], file=sys.stderr)
 "
 }
 
