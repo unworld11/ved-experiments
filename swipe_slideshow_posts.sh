@@ -2,12 +2,14 @@
 
 # Go to @gamingarb01's profile, open their posts, and for any that are
 # photo slideshows swipe through each slide before liking and moving on.
+# Uses uiautomator dump + Python to locate UI elements dynamically
+# (no hardcoded screen coords) so it works across device sizes.
 # Usage: ./swipe_slideshow_posts.sh [number_of_posts]
 
 ACCOUNT="gamingarb01"
 POST_COUNT=${1:-10}
-SLIDE_PAUSE_MIN=1   # min seconds to spend reading each slide
-SLIDE_PAUSE_MAX=3   # max seconds to spend reading each slide
+SLIDE_PAUSE_MIN=1   # min seconds per slide
+SLIDE_PAUSE_MAX=3   # max seconds per slide
 SCROLL_DELAY=2
 
 devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
@@ -24,23 +26,73 @@ wake_device() {
     sleep 1
 }
 
-# Dump the current UI hierarchy and return the total slide count if a
-# slideshow counter (e.g. "1/5") is visible, otherwise echoes 0.
+dump_ui() {
+    local device=$1
+    adb -s "$device" shell uiautomator dump /sdcard/ui_dump.xml > /dev/null 2>&1
+    adb -s "$device" shell cat /sdcard/ui_dump.xml
+}
+
+# Returns "x y" for the Videos/Posts tab, or empty if not found.
+get_videos_tab_coords() {
+    local device=$1
+    dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+for node in re.findall(r'<node[^>]*>', xml):
+    text   = re.search(r' text=\"([^\"]+)\"', node)
+    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
+    if not text or not bounds:
+        continue
+    if text.group(1) in ('Videos', 'Posts'):
+        x1,y1,x2,y2 = map(int, bounds.groups())
+        print((x1+x2)//2, (y1+y2)//2)
+        break
+"
+}
+
+# Returns "x y" for the first post in the grid (roughly square clickable
+# element below the tab bar), or empty if not found.
+get_first_post_coords() {
+    local device=$1
+    dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+candidates = []
+for node in re.findall(r'<node[^>]*>', xml):
+    if 'clickable=\"true\"' not in node:
+        continue
+    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
+    if not bounds:
+        continue
+    x1,y1,x2,y2 = map(int, bounds.groups())
+    w, h = x2-x1, y2-y1
+    # Grid cells are roughly square (±30%), at least 100px wide, and
+    # below the profile header / tab row.
+    if w >= 100 and h >= 100 and abs(w-h) < max(w,h)*0.3 and y1 > 300:
+        candidates.append((y1, x1, (x1+x2)//2, (y1+y2)//2))
+if candidates:
+    candidates.sort()
+    print(candidates[0][2], candidates[0][3])
+"
+}
+
+# Returns the total slide count from a visible counter like "1/5", else 0.
 get_slide_count() {
     local device=$1
-    local raw
-    raw=$(adb -s "$device" shell uiautomator dump /dev/tty 2>/dev/null)
-    # Counter appears as  text="1/5"  in the XML
-    local total
-    total=$(echo "$raw" | grep -oE 'text="[0-9]+/[0-9]+"' | head -1 | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f2)
-    echo "${total:-0}"
+    dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+m = re.search(r' text=\"(\d+)/(\d+)\"', xml)
+if m:
+    print(m.group(2))
+else:
+    print(0)
+"
 }
 
 rand_sleep() {
-    local lo=$1
-    local hi=$2
-    local span=$(( hi - lo + 1 ))
-    sleep $(( RANDOM % span + lo ))
+    local lo=$1 hi=$2
+    sleep $(( RANDOM % (hi - lo + 1) + lo ))
 }
 
 run_on_device() {
@@ -52,23 +104,15 @@ run_on_device() {
     cx=$((w / 2))
     cy=$((h / 2))
 
-    # Coordinates for the Posts/Videos tab (matches scroll_and_like.sh)
-    posts_tab_x=210
-    posts_tab_y=282
-
-    # First post in the grid — left column centre
-    first_post_x=185
-    first_post_y=455
-
-    # Double-tap target (centre-left, avoids sidebar buttons)
+    # Double-tap target — centre-left to avoid sidebar like/share buttons
     dtap_x=$((w * 35 / 100))
     dtap_y=$((h * 45 / 100))
 
-    # Swipe-left endpoints for advancing slides
+    # Swipe-left for advancing slides (right→left)
     slide_start_x=$((w * 80 / 100))
     slide_end_x=$((w * 20 / 100))
 
-    # Swipe-up endpoints for moving to the next post
+    # Swipe-up for moving to next post
     next_post_from=$((h * 40 / 100))
     next_post_to=$((h * 10 / 100))
 
@@ -78,14 +122,30 @@ run_on_device() {
     echo "[$device] Opening @$ACCOUNT"
     adb -s "$device" shell am start -a android.intent.action.VIEW \
         -d "https://www.tiktok.com/@$ACCOUNT"
-    sleep 4
+    sleep 5
 
-    echo "[$device] Tapping Posts tab"
-    adb -s "$device" shell input tap "$posts_tab_x" "$posts_tab_y"
-    sleep 2
+    echo "[$device] Finding Videos tab..."
+    tab_coords=$(get_videos_tab_coords "$device")
+    if [ -z "$tab_coords" ]; then
+        echo "[$device] ERROR: Could not find Videos tab in UI — aborting"
+        return 1
+    fi
+    tab_x=$(echo "$tab_coords" | awk '{print $1}')
+    tab_y=$(echo "$tab_coords" | awk '{print $2}')
+    echo "[$device] Tapping Videos tab at ($tab_x, $tab_y)"
+    adb -s "$device" shell input tap "$tab_x" "$tab_y"
+    sleep 3
 
-    echo "[$device] Opening first post"
-    adb -s "$device" shell input tap "$first_post_x" "$first_post_y"
+    echo "[$device] Finding first post in grid..."
+    post_coords=$(get_first_post_coords "$device")
+    if [ -z "$post_coords" ]; then
+        echo "[$device] ERROR: Could not find first post in grid — aborting"
+        return 1
+    fi
+    post_x=$(echo "$post_coords" | awk '{print $1}')
+    post_y=$(echo "$post_coords" | awk '{print $2}')
+    echo "[$device] Tapping first post at ($post_x, $post_y)"
+    adb -s "$device" shell input tap "$post_x" "$post_y"
     sleep 3
 
     for i in $(seq 1 "$POST_COUNT"); do
@@ -96,7 +156,6 @@ run_on_device() {
 
         if [ "$slide_count" -gt 1 ] 2>/dev/null; then
             echo "[$device] Slideshow — $slide_count slides"
-            # Already viewing slide 1; pause, then swipe through the rest
             rand_sleep $SLIDE_PAUSE_MIN $SLIDE_PAUSE_MAX
             for s in $(seq 2 "$slide_count"); do
                 echo "[$device]   → Slide $s/$slide_count"
@@ -110,14 +169,13 @@ run_on_device() {
             sleep $SCROLL_DELAY
         fi
 
-        # Double-tap to like
         echo "[$device] Liking"
         adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
         sleep 0.1
         adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
         sleep $SCROLL_DELAY
 
-        # Swipe up to next post
+        echo "[$device] Next post"
         adb -s "$device" shell input swipe "$cx" "$next_post_from" "$cx" "$next_post_to" 250
         sleep $SCROLL_DELAY
     done
