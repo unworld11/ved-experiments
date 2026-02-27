@@ -78,39 +78,6 @@ for node in re.findall(r'<node[^>]*>', xml):
     fi
 }
 
-# Tap a tab by its text label ("Following", "For You", etc.)
-tap_tab() {
-    local device=$1
-    local label=$2
-    local coords
-    coords=$(dump_ui "$device" | python3 -c "
-import sys, re
-label = '$label'
-xml = sys.stdin.read()
-for node in re.findall(r'<node[^>]*>', xml):
-    text   = re.search(r' text=\"([^\"]+)\"', node)
-    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
-    if not text or not bounds:
-        continue
-    if text.group(1) == label:
-        x1,y1,x2,y2 = map(int, bounds.groups())
-        print((x1+x2)//2, (y1+y2)//2)
-        break
-")
-    if [ -n "$coords" ]; then
-        local tx ty
-        tx=$(echo "$coords" | awk '{print $1}')
-        ty=$(echo "$coords" | awk '{print $2}')
-        echo "[$device] Tapping '$label' tab at ($tx, $ty)"
-        adb -s "$device" shell input tap "$tx" "$ty"
-        sleep 2
-        return 0
-    else
-        echo "[$device] '$label' tab not found"
-        return 1
-    fi
-}
-
 rand_sleep() {
     local lo=$1 hi=$2
     sleep $(( RANDOM % (hi - lo + 1) + lo ))
@@ -174,19 +141,18 @@ run_on_device() {
     echo "[$device] Screen: ${w}x${h}"
     wake_device "$device"
 
-    # Open TikTok (lands on For You by default)
-    echo "[$device] Opening TikTok"
-    adb -s "$device" shell monkey -p com.zhiliaoapp.musically -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
-    sleep 4
-
-    # --- For You feed ---
+    # --- For You feed (TikTok opens here by default) ---
     echo "[$device] ═══ For You feed ═══"
-    tap_tab "$device" "For You"
+    adb -s "$device" shell am start -a android.intent.action.VIEW \
+        -d "snssdk1233://feed?refer=web" > /dev/null 2>&1
+    sleep 4
     scroll_feed "$device" "For You" "$w" "$h" "$cx" "$cy"
 
     # --- Following feed ---
     echo "[$device] ═══ Following feed ═══"
-    tap_tab "$device" "Following"
+    adb -s "$device" shell am start -a android.intent.action.VIEW \
+        -d "snssdk1233://following" > /dev/null 2>&1
+    sleep 4
     scroll_feed "$device" "Following" "$w" "$h" "$cx" "$cy"
 
     echo "[$device] All feeds done"
