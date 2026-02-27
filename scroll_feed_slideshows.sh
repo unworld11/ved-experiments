@@ -45,8 +45,8 @@ else:
 
 save_post() {
     local device=$1
-    local coords
-    coords=$(dump_ui "$device" | python3 -c "
+    local result
+    result=$(dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
 for node in re.findall(r'<node[^>]*>', xml):
@@ -54,15 +54,22 @@ for node in re.findall(r'<node[^>]*>', xml):
     bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
     if not desc or not bounds:
         continue
-    if 'Favourites' in desc.group(1) or 'Favorites' in desc.group(1) or 'Favourite' in desc.group(1):
-        x1,y1,x2,y2 = map(int, bounds.groups())
-        print((x1+x2)//2, (y1+y2)//2)
+    d = desc.group(1)
+    if 'Favourites' in d or 'Favorites' in d or 'Favourite' in d:
+        selected = re.search(r'selected=\"true\"', node)
+        if selected or 'Remove' in d:
+            print('already_saved')
+        else:
+            x1,y1,x2,y2 = map(int, bounds.groups())
+            print((x1+x2)//2, (y1+y2)//2)
         break
 ")
-    if [ -n "$coords" ]; then
+    if [ "$result" = "already_saved" ]; then
+        echo "[$device] Already saved — skipping"
+    elif [ -n "$result" ]; then
         local bx by
-        bx=$(echo "$coords" | awk '{print $1}')
-        by=$(echo "$coords" | awk '{print $2}')
+        bx=$(echo "$result" | awk '{print $1}')
+        by=$(echo "$result" | awk '{print $2}')
         echo "[$device] Saving post (tap $bx, $by)"
         adb -s "$device" shell input tap "$bx" "$by"
         sleep 1
