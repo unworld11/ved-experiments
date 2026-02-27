@@ -147,11 +147,9 @@ scroll_feed() {
 
             save_post "$device"
         else
-            echo "[$device] Video — watching"
-            rand_sleep $SCROLL_DELAY $((SCROLL_DELAY + 3))
+            echo "[$device] Video — skipping"
         fi
 
-        echo "[$device] Next post"
         adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
         sleep $SCROLL_DELAY
     done
