@@ -78,6 +78,41 @@ for node in re.findall(r'<node[^>]*>', xml):
     fi
 }
 
+tap_share() {
+    local device=$1
+    local w=$2 h=$3
+    local result
+    result=$(dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+for node in re.findall(r'<node[^>]*>', xml):
+    desc = re.search(r'content-desc=\"([^\"]+)\"', node)
+    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
+    if not desc or not bounds:
+        continue
+    d = desc.group(1)
+    if 'Share' in d or 'share' in d:
+        x1,y1,x2,y2 = map(int, bounds.groups())
+        print((x1+x2)//2, (y1+y2)//2)
+        break
+")
+    if [ -n "$result" ]; then
+        local sx sy
+        sx=$(echo "$result" | awk '{print $1}')
+        sy=$(echo "$result" | awk '{print $2}')
+        echo "[$device] Tapping Share at ($sx, $sy)"
+        adb -s "$device" shell input tap "$sx" "$sy"
+        sleep 1
+        # Tap upper half of screen to dismiss share sheet
+        local dismiss_y=$((h * 20 / 100))
+        echo "[$device] Dismissing share sheet"
+        adb -s "$device" shell input tap "$((w / 2))" "$dismiss_y"
+        sleep 1
+    else
+        echo "[$device] Share button not found — skipping"
+    fi
+}
+
 rand_sleep() {
     local lo=$1 hi=$2
     sleep $(( RANDOM % (hi - lo + 1) + lo ))
@@ -98,7 +133,6 @@ scroll_feed() {
 
     for i in $(seq 1 "$SCROLLS"); do
         echo "[$device] ── $feed_name $i/$SCROLLS ──"
-        sleep 1
 
         slideshow=$(is_slideshow "$device")
 
@@ -117,15 +151,19 @@ scroll_feed() {
             adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
             sleep 0.1
             adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
-            sleep $SCROLL_DELAY
+            sleep 1
 
             save_post "$device"
+
+            tap_share "$device" "$w" "$h"
+
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
+            sleep 1
         else
             echo "[$device] Video — skipping"
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 200
+            sleep 0.3
         fi
-
-        adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
-        sleep $SCROLL_DELAY
     done
 }
 
@@ -148,11 +186,11 @@ run_on_device() {
     sleep 4
     scroll_feed "$device" "For You" "$w" "$h" "$cx" "$cy"
 
-    # --- Following feed ---
+    # --- Following feed (swipe right on the top bar to switch from FYP) ---
     echo "[$device] ═══ Following feed ═══"
-    adb -s "$device" shell am start -a android.intent.action.VIEW \
-        -d "snssdk1233://following" > /dev/null 2>&1
-    sleep 4
+    local top_y=$((h * 5 / 100))
+    adb -s "$device" shell input swipe "$((w * 70 / 100))" "$top_y" "$((w * 20 / 100))" "$top_y" 300
+    sleep 3
     scroll_feed "$device" "Following" "$w" "$h" "$cx" "$cy"
 
     echo "[$device] All feeds done"
