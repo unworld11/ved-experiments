@@ -161,8 +161,8 @@ scroll_feed() {
             sleep 1
         else
             echo "[$device] Video — skipping"
-            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 200
-            sleep 0.3
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 150
+            sleep 0.1
         fi
     done
 }
