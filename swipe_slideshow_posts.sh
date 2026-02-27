@@ -138,6 +138,7 @@ run_on_device() {
     next_post_to=$((h * 10 / 100))
 
     echo "[$device] Screen: ${w}x${h}"
+    wake_device "$device"
 
     for account in "${ACCOUNTS[@]}"; do
         echo "[$device] ═══ Opening @$account ═══"
