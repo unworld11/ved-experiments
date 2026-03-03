@@ -8,7 +8,8 @@
 SCROLLS=${1:-15}
 MAX_SLIDES=5
 
-devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+TARGET_DEVICE="RRCX800HQ2V"
+devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}' | grep "$TARGET_DEVICE")
 
 wake_device() {
     local device=$1 w=$2 h=$3
@@ -181,9 +182,7 @@ scroll_feed() {
     for i in $(seq 1 "$SCROLLS"); do
         echo "[$device] ── $feed_name $i/$SCROLLS ──"
 
-        # Wait for post to fully load before checking
-        sleep 2
-
+        sleep 1
         slideshow=$(is_slideshow "$device")
 
         if [ "$slideshow" = "yes" ]; then
