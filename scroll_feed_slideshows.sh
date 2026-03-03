@@ -134,19 +134,19 @@ for node in re.findall(r'<node[^>]*>', xml):
                 cly=$(echo "$cl_result" | awk '{print $2}')
                 adb -s "$device" shell input tap "$clx" "$cly"
                 sleep 1
-                # Try cmd clipboard first (Android 10+), fall back to dumpsys
-                url=$(adb -s "$device" shell cmd clipboard get-text 2>/dev/null | python3 -c "
-import sys, re
-m = re.search(r'https?://\S*tiktok\S*', sys.stdin.read())
-if m: print(m.group())
+                # Read clipboard via service call (works on Android 10+)
+                url=$(adb -s "$device" shell "service call clipboard 2 i32 0 s16 com.android.shell" 2>/dev/null | python3 -c "
+import sys, re, struct
+raw = sys.stdin.read()
+hex_vals = re.findall(r'([0-9a-f]{8})', raw)
+if hex_vals:
+    data = b''
+    for h in hex_vals:
+        data += struct.pack('<I', int(h, 16))
+    text = data.decode('utf-16-le', errors='ignore')
+    m = re.search(r'https?://[^\x00\s]+', text)
+    if m: print(m.group().rstrip('\x00'))
 " 2>/dev/null)
-                if [ -z "$url" ]; then
-                    url=$(adb -s "$device" shell dumpsys clipboard 2>/dev/null | python3 -c "
-import sys, re
-m = re.search(r'https?://\S*tiktok\S*', sys.stdin.read())
-if m: print(m.group())
-" 2>/dev/null)
-                fi
             fi
         fi
         if [ -n "$url" ]; then
