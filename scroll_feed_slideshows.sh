@@ -76,11 +76,12 @@ for node in re.findall(r'<node[^>]*>', xml):
     fi
 }
 
-tap_share() {
+tap_share_and_copy() {
     local device=$1
     local w=$2 h=$3
-    local result
-    result=$(dump_ui "$device" | python3 -c "
+    # Find and tap Share button
+    local share_result
+    share_result=$(dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
 for node in re.findall(r'<node[^>]*>', xml):
@@ -94,26 +95,21 @@ for node in re.findall(r'<node[^>]*>', xml):
         print((x1+x2)//2, (y1+y2)//2)
         break
 ")
-    if [ -n "$result" ]; then
-        local sx sy
-        sx=$(echo "$result" | awk '{print $1}')
-        sy=$(echo "$result" | awk '{print $2}')
-        echo "[$device] Tapping Share at ($sx, $sy)"
-        adb -s "$device" shell input tap "$sx" "$sy"
-        sleep 1.5
-        # Try to read post URL directly from share sheet UI (any attribute)
-        local url
-        url=$(dump_ui "$device" | python3 -c "
-import sys, re
-xml = sys.stdin.read()
-m = re.search(r'\"(https?://[^\"]*tiktok[^\"]+)\"', xml)
-if m:
-    print(m.group(1))
-" 2>/dev/null)
-        if [ -z "$url" ]; then
-            # Fall back: tap Copy link, then read clipboard
-            local cl_result
-            cl_result=$(dump_ui "$device" | python3 -c "
+    if [ -z "$share_result" ]; then
+        echo "[$device] Share button not found — skipping"
+        return
+    fi
+    local sx sy
+    sx=$(echo "$share_result" | awk '{print $1}')
+    sy=$(echo "$share_result" | awk '{print $2}')
+    echo "[$device] Tapping Share at ($sx, $sy)"
+    adb -s "$device" shell input tap "$sx" "$sy"
+    sleep 1.5
+    # Clear logcat before tapping Copy link
+    adb -s "$device" logcat -c 2>/dev/null
+    # Find and tap Copy link
+    local cl_result
+    cl_result=$(dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
 for node in re.findall(r'<node[^>]*>', xml):
@@ -128,41 +124,40 @@ for node in re.findall(r'<node[^>]*>', xml):
         print((x1+x2)//2, (y1+y2)//2)
         break
 " 2>/dev/null)
-            if [ -n "$cl_result" ]; then
-                local clx cly
-                clx=$(echo "$cl_result" | awk '{print $1}')
-                cly=$(echo "$cl_result" | awk '{print $2}')
-                adb -s "$device" shell input tap "$clx" "$cly"
-                sleep 1
-                # Read clipboard via service call (works on Android 10+)
-                url=$(adb -s "$device" shell "service call clipboard 2 i32 0 s16 com.android.shell" 2>/dev/null | python3 -c "
-import sys, re, struct
-raw = sys.stdin.read()
-hex_vals = re.findall(r'([0-9a-f]{8})', raw)
-if hex_vals:
-    data = b''
-    for h in hex_vals:
-        data += struct.pack('<I', int(h, 16))
-    text = data.decode('utf-16-le', errors='ignore')
-    m = re.search(r'https?://[^\x00\s]+', text)
-    if m: print(m.group().rstrip('\x00'))
-" 2>/dev/null)
-            fi
-        fi
+    if [ -n "$cl_result" ]; then
+        local clx cly
+        clx=$(echo "$cl_result" | awk '{print $1}')
+        cly=$(echo "$cl_result" | awk '{print $2}')
+        adb -s "$device" shell input tap "$clx" "$cly"
+        sleep 1
+        # Grab URL from logcat
+        local url
+        url=$(adb -s "$device" logcat -d 2>/dev/null | grep -oE 'https?://[^ "]*tiktok[^ "]*' | head -1)
         if [ -n "$url" ]; then
             echo "[$device] Slideshow URL: $url"
             echo "$url" >> "slideshow_urls_$(date +%Y%m%d).txt"
         else
-            echo "[$device] Could not extract post URL"
+            echo "[$device] Could not capture URL from logcat"
         fi
-        # Tap upper half of screen to dismiss share sheet
-        local dismiss_y=$((h * 20 / 100))
-        echo "[$device] Dismissing share sheet"
-        adb -s "$device" shell input tap "$((w / 2))" "$dismiss_y"
-        sleep 1
-    else
-        echo "[$device] Share button not found — skipping"
     fi
+    # Dismiss share sheet
+    local dismiss_y=$((h * 20 / 100))
+    adb -s "$device" shell input tap "$((w / 2))" "$dismiss_y"
+    sleep 1
+}
+
+# Extract @username from the current post UI
+get_post_username() {
+    local device=$1
+    dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+for node in re.findall(r'<node[^>]*>', xml):
+    text_m = re.search(r' text=\"(@[A-Za-z0-9_.]+)\"', node)
+    if text_m:
+        print(text_m.group(1))
+        break
+"
 }
 
 # Scroll through whichever feed is currently active.
@@ -202,7 +197,14 @@ scroll_feed() {
 
             save_post "$device"
 
-            tap_share "$device" "$w" "$h"
+            local username
+            username=$(get_post_username "$device")
+            if [ -n "$username" ]; then
+                echo "[$device] Slideshow by $username"
+                echo "$username" >> "slideshow_accounts_$(date +%Y%m%d).txt"
+            fi
+
+            tap_share_and_copy "$device" "$w" "$h"
 
             adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 300
             sleep 1
