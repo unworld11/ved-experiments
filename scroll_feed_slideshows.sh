@@ -9,6 +9,22 @@ SCROLLS=${1:-15}
 MAX_SLIDES=5
 
 TARGET_DEVICE="RRCX800HQ2V"
+# Load Supabase credentials from .env
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    source "$SCRIPT_DIR/.env"
+fi
+
+save_url_to_supabase() {
+    local url=$1 username=$2 device=$3
+    curl -s "$SUPABASE_URL/rest/v1/slideshow_urls" \
+        -H "apikey: $SUPABASE_KEY" \
+        -H "Authorization: Bearer $SUPABASE_KEY" \
+        -H "Content-Type: application/json" \
+        -d "{\"url\": \"$url\", \"username\": \"$username\", \"device_id\": \"$device\"}" \
+        > /dev/null 2>&1
+    echo "[$device] Saved to Supabase"
+}
 devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}' | grep "$TARGET_DEVICE")
 
 wake_device() {
@@ -155,13 +171,16 @@ for node in re.findall(r'<node[^>]*>', xml):
         if [ -n "$url" ]; then
             echo "[$device] Slideshow URL: $url"
             echo "$url" >> "slideshow_urls_$(date +%Y%m%d).txt"
+            save_url_to_supabase "$url" "$_current_username" "$device"
         else
             echo "[$device] Could not read URL from Chrome"
         fi
-        # Return to TikTok directly
+        # Return to TikTok and swipe to next post to avoid re-processing
         adb -s "$device" shell am start -a android.intent.action.VIEW \
             -d "snssdk1233://feed?refer=web" > /dev/null 2>&1
         sleep 2
+        adb -s "$device" shell input swipe "$((w/2))" "$((h*70/100))" "$((w/2))" "$((h*20/100))" 300
+        sleep 1
     fi
 }
 
@@ -216,11 +235,10 @@ scroll_feed() {
 
             save_post "$device"
 
-            local username
-            username=$(get_post_username "$device")
-            if [ -n "$username" ]; then
-                echo "[$device] Slideshow by $username"
-                echo "$username" >> "slideshow_accounts_$(date +%Y%m%d).txt"
+            _current_username=$(get_post_username "$device")
+            if [ -n "$_current_username" ]; then
+                echo "[$device] Slideshow by $_current_username"
+                echo "$_current_username" >> "slideshow_accounts_$(date +%Y%m%d).txt"
             fi
 
             tap_share_and_copy "$device" "$w" "$h"
