@@ -106,16 +106,27 @@ for node in re.findall(r'<node[^>]*>', xml):
 
 # Returns "yes" if the current post is a photo slideshow, "no" otherwise.
 # TikTok marks slideshows with a "Photo" label on screen.
+# Retries up to 3 times since the label may not appear immediately.
 is_slideshow() {
     local device=$1
-    dump_ui "$device" | python3 -c "
+    local attempt
+    for attempt in 1 2 3; do
+        local result
+        result=$(dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
 if re.search(r'(?:text|content-desc)=\"Photo\"', xml):
     print('yes')
 else:
     print('no')
-"
+")
+        if [ "$result" = "yes" ]; then
+            echo "yes"
+            return
+        fi
+        sleep 1
+    done
+    echo "no"
 }
 
 tap_share() {
