@@ -1,26 +1,23 @@
 #!/bin/bash
 
-# Scroll through the TikTok "For You" and "Following" feeds.
+# Scroll through the TikTok feed.
 # Detects photo slideshows and swipes through each slide before
 # liking, saving, and moving to the next post.
-# Usage: ./scroll_feed_slideshows.sh [scrolls_per_feed]
+# Usage: ./scroll_feed_slideshows.sh [num_posts]
 
 SCROLLS=${1:-15}
 MAX_SLIDES=5
-SLIDE_PAUSE_MIN=1
-SLIDE_PAUSE_MAX=3
-SCROLL_DELAY=2
 
 devices=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 
 wake_device() {
-    local device=$1
+    local device=$1 w=$2 h=$3
     screen=$(adb -s "$device" shell dumpsys power | grep 'Display Power' | grep -o 'state=[A-Z]*' | cut -d= -f2)
     if [ "$screen" != "ON" ]; then
         echo "[$device] Waking up screen"
         adb -s "$device" shell input keyevent KEYCODE_WAKEUP
         sleep 1
-        adb -s "$device" shell input swipe 540 1800 540 900 300
+        adb -s "$device" shell input swipe "$((w/2))" "$((h*80/100))" "$((w/2))" "$((h*40/100))" 300
         sleep 1
     fi
 }
@@ -33,24 +30,14 @@ dump_ui() {
 
 is_slideshow() {
     local device=$1
-    local attempt
-    for attempt in 1 2 3; do
-        local result
-        result=$(dump_ui "$device" | python3 -c "
+    dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
 if re.search(r'(?:text|content-desc)=\"Photo\"', xml):
     print('yes')
 else:
     print('no')
-")
-        if [ "$result" = "yes" ]; then
-            echo "yes"
-            return
-        fi
-        sleep 1
-    done
-    echo "no"
+"
 }
 
 save_post() {
@@ -177,11 +164,6 @@ if m: print(m.group())
     fi
 }
 
-rand_sleep() {
-    local lo=$1 hi=$2
-    sleep $(( RANDOM % (hi - lo + 1) + lo ))
-}
-
 # Scroll through whichever feed is currently active.
 scroll_feed() {
     local device=$1
@@ -192,11 +174,15 @@ scroll_feed() {
     local dtap_y=$((h * 45 / 100))
     local slide_start_x=$((w * 80 / 100))
     local slide_end_x=$((w * 20 / 100))
-    local swipe_from=$((h * 40 / 100))
-    local swipe_to=$((h * 10 / 100))
+    local slide_y=$((h * 40 / 100))
+    local swipe_from=$((h * 70 / 100))
+    local swipe_to=$((h * 20 / 100))
 
     for i in $(seq 1 "$SCROLLS"); do
         echo "[$device] ── $feed_name $i/$SCROLLS ──"
+
+        # Wait for post to fully load before checking
+        sleep 2
 
         slideshow=$(is_slideshow "$device")
 
@@ -205,7 +191,7 @@ scroll_feed() {
             for s in $(seq 2 "$MAX_SLIDES"); do
                 echo "[$device]   → Slide $s"
                 adb -s "$device" shell input swipe \
-                    "$slide_start_x" "$cy" "$slide_end_x" "$cy" 400
+                    "$slide_start_x" "$slide_y" "$slide_end_x" "$slide_y" 400
                 sleep $(( RANDOM % 2 + 1 ))
             done
 
@@ -219,13 +205,13 @@ scroll_feed() {
 
             tap_share "$device" "$w" "$h"
 
-            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 300
             sleep 1
         else
             echo "[$device] Video — watching briefly"
             sleep $(( RANDOM % 3 + 3 ))
-            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
-            sleep 0.5
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 300
+            sleep 1
         fi
     done
 }
@@ -240,23 +226,15 @@ run_on_device() {
     cy=$((h / 2))
 
     echo "[$device] Screen: ${w}x${h}"
-    wake_device "$device"
+    wake_device "$device" "$w" "$h"
 
-    # --- For You feed (TikTok opens here by default) ---
-    echo "[$device] ═══ For You feed ═══"
+    # Open TikTok feed
     adb -s "$device" shell am start -a android.intent.action.VIEW \
         -d "snssdk1233://feed?refer=web" > /dev/null 2>&1
     sleep 4
-    scroll_feed "$device" "For You" "$w" "$h" "$cx" "$cy"
+    scroll_feed "$device" "Feed" "$w" "$h" "$cx" "$cy"
 
-    # --- Following feed (swipe right on the top bar to switch from FYP) ---
-    echo "[$device] ═══ Following feed ═══"
-    local top_y=$((h * 5 / 100))
-    adb -s "$device" shell input swipe "$((w * 70 / 100))" "$top_y" "$((w * 20 / 100))" "$top_y" 300
-    sleep 3
-    scroll_feed "$device" "Following" "$w" "$h" "$cx" "$cy"
-
-    echo "[$device] All feeds done"
+    echo "[$device] Done"
 }
 
 for device in $devices; do
