@@ -102,7 +102,53 @@ for node in re.findall(r'<node[^>]*>', xml):
         sy=$(echo "$result" | awk '{print $2}')
         echo "[$device] Tapping Share at ($sx, $sy)"
         adb -s "$device" shell input tap "$sx" "$sy"
-        sleep 1
+        sleep 1.5
+        # Try to read post URL directly from share sheet UI
+        local url
+        url=$(dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+m = re.search(r'(?:text|content-desc)=\"(https?://[^\"]*tiktok[^\"]+)\"', xml)
+if m:
+    print(m.group(1))
+" 2>/dev/null)
+        if [ -z "$url" ]; then
+            # Fall back: tap Copy link, then read clipboard (works on Android ≤9)
+            local cl_result
+            cl_result=$(dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+for node in re.findall(r'<node[^>]*>', xml):
+    desc = re.search(r'content-desc=\"([^\"]+)\"', node)
+    text_m = re.search(r' text=\"([^\"]+)\"', node)
+    bounds = re.search(r'bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', node)
+    if not bounds:
+        continue
+    d = (desc.group(1) if desc else '') + ' ' + (text_m.group(1) if text_m else '')
+    if re.search(r'[Cc]opy.{0,5}[Ll]ink', d):
+        x1,y1,x2,y2 = map(int, bounds.groups())
+        print((x1+x2)//2, (y1+y2)//2)
+        break
+" 2>/dev/null)
+            if [ -n "$cl_result" ]; then
+                local clx cly
+                clx=$(echo "$cl_result" | awk '{print $1}')
+                cly=$(echo "$cl_result" | awk '{print $2}')
+                adb -s "$device" shell input tap "$clx" "$cly"
+                sleep 0.5
+                url=$(adb -s "$device" shell dumpsys clipboard 2>/dev/null | python3 -c "
+import sys, re
+m = re.search(r'https?://\S+tiktok\S+', sys.stdin.read())
+if m: print(m.group())
+" 2>/dev/null)
+            fi
+        fi
+        if [ -n "$url" ]; then
+            echo "[$device] Slideshow URL: $url"
+            echo "$url" >> "slideshow_urls_$(date +%Y%m%d).txt"
+        else
+            echo "[$device] Could not extract post URL"
+        fi
         # Tap upper half of screen to dismiss share sheet
         local dismiss_y=$((h * 20 / 100))
         echo "[$device] Dismissing share sheet"
