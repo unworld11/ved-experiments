@@ -208,7 +208,7 @@ run_on_device() {
                 for s in $(seq 2 "$MAX_SLIDES"); do
                     echo "[$device]   → Slide $s"
                     adb -s "$device" shell input swipe \
-                        "$slide_start_x" "$cy" "$slide_end_x" "$cy" 250
+                        "$slide_start_x" "$cy" "$slide_end_x" "$cy" 400
                     sleep 1
                     rand_sleep $SLIDE_PAUSE_MIN $SLIDE_PAUSE_MAX
                 done

@@ -195,8 +195,8 @@ scroll_feed() {
             for s in $(seq 2 "$MAX_SLIDES"); do
                 echo "[$device]   → Slide $s"
                 adb -s "$device" shell input swipe \
-                    "$slide_start_x" "$cy" "$slide_end_x" "$cy" 250
-                sleep 0.$(( RANDOM % 5 + 1 ))
+                    "$slide_start_x" "$cy" "$slide_end_x" "$cy" 400
+                sleep $(( RANDOM % 2 + 1 ))
             done
 
             echo "[$device] Liking"
