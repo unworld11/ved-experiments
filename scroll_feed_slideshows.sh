@@ -130,15 +130,38 @@ for node in re.findall(r'<node[^>]*>', xml):
         cly=$(echo "$cl_result" | awk '{print $2}')
         adb -s "$device" shell input tap "$clx" "$cly"
         sleep 1
-        # Grab URL from logcat
+        # Open Chrome, paste clipboard into URL bar, read URL from UI dump
+        adb -s "$device" shell am start -a android.intent.action.VIEW \
+            -d "about:blank" com.android.chrome > /dev/null 2>&1
+        sleep 2
+        # Tap the URL bar (top of screen)
+        adb -s "$device" shell input tap "$((w / 2))" "$((h * 5 / 100))"
+        sleep 0.5
+        # Select all + paste
+        adb -s "$device" shell input keyevent 279  # KEYCODE_PASTE
+        sleep 0.5
+        # Read the pasted URL from UI dump
         local url
-        url=$(adb -s "$device" logcat -d 2>/dev/null | grep -oE 'https?://[^ "]*tiktok[^ "]*' | head -1)
+        url=$(dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+for node in re.findall(r'<node[^>]*>', xml):
+    text_m = re.search(r' text=\"(https?://[^\"]*tiktok[^\"]+)\"', node)
+    if text_m:
+        print(text_m.group(1))
+        break
+" 2>/dev/null)
         if [ -n "$url" ]; then
             echo "[$device] Slideshow URL: $url"
             echo "$url" >> "slideshow_urls_$(date +%Y%m%d).txt"
         else
-            echo "[$device] Could not capture URL from logcat"
+            echo "[$device] Could not read URL from Chrome"
         fi
+        # Go back to TikTok
+        adb -s "$device" shell input keyevent KEYCODE_BACK
+        sleep 0.5
+        adb -s "$device" shell input keyevent KEYCODE_BACK
+        sleep 0.5
     fi
     # Dismiss share sheet
     local dismiss_y=$((h * 20 / 100))
