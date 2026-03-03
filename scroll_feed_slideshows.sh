@@ -175,7 +175,7 @@ scroll_feed() {
     local dtap_y=$((h * 45 / 100))
     local slide_start_x=$((w * 80 / 100))
     local slide_end_x=$((w * 20 / 100))
-    local slide_y=$((h * 40 / 100))
+    local slide_y=$((h * 30 / 100))
     local swipe_from=$((h * 70 / 100))
     local swipe_to=$((h * 20 / 100))
 
