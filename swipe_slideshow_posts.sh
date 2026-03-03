@@ -111,7 +111,7 @@ is_slideshow() {
     dump_ui "$device" | python3 -c "
 import sys, re
 xml = sys.stdin.read()
-if re.search(r' text=\"Photo\"', xml):
+if re.search(r'(?:text|content-desc)=\"Photo\"', xml):
     print('yes')
 else:
     print('no')
