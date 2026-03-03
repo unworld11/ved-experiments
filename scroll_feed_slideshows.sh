@@ -212,9 +212,10 @@ scroll_feed() {
             adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
             sleep 1
         else
-            echo "[$device] Video — skipping"
-            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 150
-            sleep 0.1
+            echo "[$device] Video — watching briefly"
+            sleep $(( RANDOM % 3 + 3 ))
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
+            sleep 0.5
         fi
     done
 }
