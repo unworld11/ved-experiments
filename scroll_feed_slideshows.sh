@@ -201,7 +201,7 @@ scroll_feed() {
 
             echo "[$device] Liking"
             adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
-            sleep 0.1
+            sleep 0.05
             adb -s "$device" shell input tap "$dtap_x" "$dtap_y"
             sleep 1
 
