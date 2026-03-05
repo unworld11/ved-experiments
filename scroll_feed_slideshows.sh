@@ -85,6 +85,24 @@ dismiss_profile_if_open() {
     return 1
 }
 
+# Detect if the current post is an ad (Sponsored/Promoted content).
+is_ad() {
+    local device=$1
+    dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+if re.search(r'(?:text|content-desc)=\"Sponsored\"', xml) or \
+   re.search(r'(?:text|content-desc)=\"Promoted\"', xml) or \
+   re.search(r'content-desc=\"Ad\"', xml) or \
+   re.search(r'text=\"Shop now\"', xml) or \
+   re.search(r'text=\"Install\"', xml) or \
+   re.search(r'text=\"Learn more\"', xml):
+    print('yes')
+else:
+    print('no')
+"
+}
+
 save_post() {
     local device=$1
     local result
@@ -248,6 +266,14 @@ scroll_feed() {
         # Guard against mistouches that open a profile
         if dismiss_profile_if_open "$device"; then
             echo "[$device] Returned to feed — continuing"
+        fi
+
+        # Skip ads — just swipe to next post
+        if [ "$(is_ad "$device")" = "yes" ]; then
+            echo "[$device] Ad detected — skipping"
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 300
+            sleep 1
+            continue
         fi
 
         slideshow=$(is_slideshow "$device")
