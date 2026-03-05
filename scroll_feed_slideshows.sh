@@ -226,6 +226,10 @@ for node in re.findall(r'<node[^>]*>', xml):
         sleep 1
         adb -s "$device" shell input keyevent KEYCODE_BACK
         sleep 2
+        # Force swipe to next post right away since we came from Chrome
+        echo "[$device] Swiping to next post after Chrome return"
+        adb -s "$device" shell input swipe "$((w/2))" "$((h*75/100))" "$((w/2))" "$((h*15/100))" 250
+        sleep 1
     fi
 }
 
@@ -254,8 +258,8 @@ scroll_feed() {
     local slide_start_x=$((w * 80 / 100))
     local slide_end_x=$((w * 20 / 100))
     local slide_y=$((h * 30 / 100))
-    local swipe_from=$((h * 70 / 100))
-    local swipe_to=$((h * 20 / 100))
+    local swipe_from=$((h * 75 / 100))
+    local swipe_to=$((h * 15 / 100))
 
     for i in $(seq 1 "$SCROLLS"); do
         echo "[$device] ── $feed_name $i/$SCROLLS ──"
@@ -302,7 +306,9 @@ scroll_feed() {
 
             tap_share_and_copy "$device" "$w" "$h"
 
-            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 300
+            # tap_share_and_copy already swipes after Chrome return;
+            # swipe here too in case Copy link wasn't found (no Chrome detour)
+            adb -s "$device" shell input swipe "$cx" "$swipe_from" "$cx" "$swipe_to" 250
             sleep 1
         else
             echo "[$device] Video — watching briefly"
