@@ -221,12 +221,16 @@ for node in re.findall(r'<node[^>]*>', xml):
         else
             echo "[$device] Could not read URL from Chrome"
         fi
-        # Return to TikTok by pressing Back (preserves feed position)
-        adb -s "$device" shell input keyevent KEYCODE_BACK
+        # Kill Chrome and bring TikTok back to foreground
+        adb -s "$device" shell am force-stop com.android.chrome
         sleep 1
-        adb -s "$device" shell input keyevent KEYCODE_BACK
-        sleep 2
-        # Force swipe to next post right away since we came from Chrome
+        # Resume TikTok (LAUNCHER intent resumes existing task, preserves feed position)
+        adb -s "$device" shell am start -a android.intent.action.MAIN \
+            -c android.intent.category.LAUNCHER -f 0x10200000 \
+            -n com.zhiliaoapp.musically/com.ss.android.ugc.aweme.splash.SplashActivity \
+            > /dev/null 2>&1
+        sleep 3
+        # Swipe to next post so we don't re-process the same slideshow
         echo "[$device] Swiping to next post after Chrome return"
         adb -s "$device" shell input swipe "$((w/2))" "$((h*75/100))" "$((w/2))" "$((h*15/100))" 250
         sleep 1
