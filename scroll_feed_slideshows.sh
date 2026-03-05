@@ -57,6 +57,34 @@ else:
 "
 }
 
+# Detect if a profile page opened (mistouch) by looking for
+# "Following" and "Followers" text together in the UI dump.
+is_profile_page() {
+    local device=$1
+    dump_ui "$device" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+has_following = bool(re.search(r'text=\"Following\"', xml))
+has_followers = bool(re.search(r'text=\"Followers\"', xml))
+if has_following and has_followers:
+    print('yes')
+else:
+    print('no')
+"
+}
+
+# If a profile was accidentally opened, press back to return to the feed.
+dismiss_profile_if_open() {
+    local device=$1
+    if [ "$(is_profile_page "$device")" = "yes" ]; then
+        echo "[$device] Profile page detected (mistouch) — going back"
+        adb -s "$device" shell input keyevent KEYCODE_BACK
+        sleep 2
+        return 0
+    fi
+    return 1
+}
+
 save_post() {
     local device=$1
     local result
@@ -216,6 +244,12 @@ scroll_feed() {
         echo "[$device] ── $feed_name $i/$SCROLLS ──"
 
         sleep 1
+
+        # Guard against mistouches that open a profile
+        if dismiss_profile_if_open "$device"; then
+            echo "[$device] Returned to feed — continuing"
+        fi
+
         slideshow=$(is_slideshow "$device")
 
         if [ "$slideshow" = "yes" ]; then
