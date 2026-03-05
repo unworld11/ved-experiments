@@ -221,12 +221,11 @@ for node in re.findall(r'<node[^>]*>', xml):
         else
             echo "[$device] Could not read URL from Chrome"
         fi
-        # Return to TikTok and swipe to next post to avoid re-processing
-        adb -s "$device" shell am start -a android.intent.action.VIEW \
-            -d "snssdk1233://feed?refer=web" > /dev/null 2>&1
-        sleep 2
-        adb -s "$device" shell input swipe "$((w/2))" "$((h*70/100))" "$((w/2))" "$((h*20/100))" 300
+        # Return to TikTok by pressing Back (preserves feed position)
+        adb -s "$device" shell input keyevent KEYCODE_BACK
         sleep 1
+        adb -s "$device" shell input keyevent KEYCODE_BACK
+        sleep 2
     fi
 }
 
