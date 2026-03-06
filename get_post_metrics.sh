@@ -283,9 +283,9 @@ if any(metrics[k] is None for k in ("likes", "comments", "shares")):
 # Phase 2 — views from the profile page grid
 # =====================================================================
 
-# Extract the video ID from the URL (the numeric segment after /video/)
+# Extract the post ID from the URL (numeric segment after /video/ or /photo/)
 video_id = None
-vid_match = re.search(r"/video/(\d+)", post_url)
+vid_match = re.search(r"/(?:video|photo)/(\d+)", post_url)
 if vid_match:
     video_id = vid_match.group(1)
 
