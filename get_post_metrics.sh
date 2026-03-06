@@ -296,50 +296,77 @@ except Exception:
 if html:
     view_count = None
 
-    # Strategy 1: __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON blob
-    rehydration_match = re.search(
-        r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
-        html,
-        re.DOTALL,
+    # All known field names TikTok uses for view/play count
+    VIEW_KEYS = re.compile(
+        r'"(?:playCount|play_count|viewCount|view_count|plays|views)"\s*:\s*"?(\d+)"?'
     )
-    if rehydration_match:
-        try:
-            blob = json.loads(rehydration_match.group(1))
-            # Walk the nested structure to find statsV2 or stats with playCount
-            blob_str = json.dumps(blob)
-            play_match = re.search(r'"playCount"\s*:\s*(\d+)', blob_str)
-            if play_match:
-                view_count = int(play_match.group(1))
-                if debug:
-                    print(f"  [views] views={view_count} from __UNIVERSAL_DATA_FOR_REHYDRATION__", file=sys.stderr)
-        except json.JSONDecodeError as e:
-            if debug:
-                print(f"  [views] JSON parse error in rehydration blob: {e}", file=sys.stderr)
 
-    # Strategy 2: search raw HTML for playCount in any script tag
+    # Known JSON blob script IDs in TikTok pages
+    BLOB_PATTERNS = [
+        ("__UNIVERSAL_DATA_FOR_REHYDRATION__",
+         re.compile(r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', re.DOTALL)),
+        ("SIGI_STATE",
+         re.compile(r'<script[^>]*id="SIGI_STATE"[^>]*>(.*?)</script>', re.DOTALL)),
+        ("__NEXT_DATA__",
+         re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)),
+        ("webapp.video-detail",
+         re.compile(r'"webapp\.video-detail"\s*:\s*(\{.*?\})\s*(?:,\s*"webapp\.|</script>)', re.DOTALL)),
+    ]
+
+    # Strategy 1: extract from known JSON blobs
+    for blob_name, blob_pat in BLOB_PATTERNS:
+        if view_count is not None:
+            break
+        blob_match = blob_pat.search(html)
+        if debug:
+            print(f"  [views] {blob_name}: {'found' if blob_match else 'not found'}", file=sys.stderr)
+        if not blob_match:
+            continue
+        blob_text = blob_match.group(1)
+        key_match = VIEW_KEYS.search(blob_text)
+        if key_match:
+            view_count = int(key_match.group(1))
+            if debug:
+                print(f"  [views] views={view_count} from {blob_name}", file=sys.stderr)
+
+    # Strategy 2: search ALL script tags for the view key
     if view_count is None:
-        play_match = re.search(r'"playCount"\s*:\s*(\d+)', html)
-        if play_match:
-            view_count = int(play_match.group(1))
-            if debug:
-                print(f"  [views] views={view_count} from raw HTML playCount", file=sys.stderr)
+        for script_match in re.finditer(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
+            key_match = VIEW_KEYS.search(script_match.group(1))
+            if key_match:
+                view_count = int(key_match.group(1))
+                if debug:
+                    print(f"  [views] views={view_count} from script tag", file=sys.stderr)
+                break
 
-    # Strategy 3: og:video meta tag or similar
+    # Strategy 3: search entire raw HTML (last resort)
+    if view_count is None:
+        key_match = VIEW_KEYS.search(html)
+        if key_match:
+            view_count = int(key_match.group(1))
+            if debug:
+                print(f"  [views] views={view_count} from raw HTML", file=sys.stderr)
+
+    # Strategy 4: og:description meta tag
     if view_count is None:
         og_match = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html)
         if og_match:
             desc = og_match.group(1)
-            v = re.search(r"([\d.,]+[KMB]?)\s+(?:views|plays)", desc, re.IGNORECASE)
+            v = re.search(r"([\d.,]+[KMB]?)\s+(?:views|plays|Likes)", desc, re.IGNORECASE)
             if v:
                 view_count = parse_count(v.group(1))
                 if debug:
-                    print(f"  [views] views={view_count} from og:description", file=sys.stderr)
+                    print(f"  [views] views={view_count} from og:description '{desc[:80]}'", file=sys.stderr)
 
     if view_count is not None:
         metrics["views"] = view_count
     elif debug:
-        print("  [views] could not find playCount in ZenRows HTML", file=sys.stderr)
+        print("  [views] could not find view count in ZenRows HTML", file=sys.stderr)
         print(f"  [views] HTML length: {len(html)} chars", file=sys.stderr)
+        # Show what JSON-like keys ARE present for diagnosis
+        found_keys = set(re.findall(r'"(\w*[Cc]ount\w*)"', html[:50000]))
+        if found_keys:
+            print(f"  [views] count-like keys found: {sorted(found_keys)}", file=sys.stderr)
 
 elif debug:
     print("  [views] no ZenRows HTML available", file=sys.stderr)
