@@ -5,11 +5,25 @@ set -euo pipefail
 # Open a TikTok post on an Android device and print its visible metrics as JSON.
 # Usage: ./get_post_metrics.sh <post_url> [device_id]
 
-POST_URL="${1:-}"
-DEVICE_ID="${2:-}"
+DEBUG=false
+POST_URL=""
+DEVICE_ID=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --debug) DEBUG=true ;;
+        *)
+            if [ -z "$POST_URL" ]; then
+                POST_URL="$arg"
+            elif [ -z "$DEVICE_ID" ]; then
+                DEVICE_ID="$arg"
+            fi
+            ;;
+    esac
+done
 
 if [ -z "$POST_URL" ]; then
-    echo "Usage: $0 <post_url> [device_id]" >&2
+    echo "Usage: $0 <post_url> [device_id] [--debug]" >&2
     exit 1
 fi
 
@@ -53,28 +67,29 @@ trap 'rm -f "$TMP_XML"' EXIT
 
 dump_ui "$DEVICE_ID" "$TMP_XML"
 
-python3 - "$TMP_XML" "$POST_URL" "$DEVICE_ID" <<'PY'
+python3 - "$TMP_XML" "$POST_URL" "$DEVICE_ID" "$DEBUG" <<'PY'
 import json
 import re
 import sys
 from xml.etree import ElementTree
 
-xml_path, post_url, device_id = sys.argv[1:4]
+xml_path, post_url, device_id, debug_flag = sys.argv[1:5]
+debug = debug_flag == "true"
 
-metric_patterns = {
-    "likes": (
-        re.compile(r"(?P<count>[\d.,]+(?:[KMB])?)\s+likes?\b", re.IGNORECASE),
-        re.compile(r"\blikes?\b[^0-9]*(?P<count>[\d.,]+(?:[KMB])?)", re.IGNORECASE),
-    ),
-    "comments": (
-        re.compile(r"(?P<count>[\d.,]+(?:[KMB])?)\s+comments?\b", re.IGNORECASE),
-        re.compile(r"\bcomments?\b[^0-9]*(?P<count>[\d.,]+(?:[KMB])?)", re.IGNORECASE),
-    ),
-    "shares": (
-        re.compile(r"(?P<count>[\d.,]+(?:[KMB])?)\s+shares?\b", re.IGNORECASE),
-        re.compile(r"\bshares?\b[^0-9]*(?P<count>[\d.,]+(?:[KMB])?)", re.IGNORECASE),
-    ),
+# TikTok button descriptions vary across versions:
+#   "Like"  /  "like video"  /  "1234 likes, like video"
+#   "Comment"  /  "read or add comments"  /  "34 comments, read or add comments"
+#   "Share"  /  "share video"  /  "8 shares, share video"
+# We match any content-desc/text containing the keyword, then try to extract a
+# count from the same string first, falling back to sibling/child nodes.
+
+METRIC_KEYWORDS = {
+    "likes": re.compile(r"\blike", re.IGNORECASE),
+    "comments": re.compile(r"\bcomment", re.IGNORECASE),
+    "shares": re.compile(r"\bshare", re.IGNORECASE),
 }
+
+INLINE_COUNT = re.compile(r"([\d.,]+\s*[KMBkmb]?)")
 
 suffix_multipliers = {
     "K": 1_000,
@@ -86,14 +101,11 @@ suffix_multipliers = {
 def parse_count(raw_count):
     if not raw_count:
         return None
-
     cleaned = raw_count.strip().replace(",", "").upper()
     if not cleaned:
         return None
-
     suffix = cleaned[-1]
     multiplier = suffix_multipliers.get(suffix)
-
     try:
         if multiplier is None:
             return int(float(cleaned))
@@ -102,42 +114,121 @@ def parse_count(raw_count):
         return None
 
 
-def extract_metric(text, metric_name):
-    if not text:
+def get_numeric_value(node):
+    for attr in ("text", "content-desc"):
+        val = node.attrib.get(attr, "").strip()
+        if val and INLINE_COUNT.fullmatch(val):
+            return val
+    return None
+
+
+def find_count_in_children(node):
+    for child in node:
+        val = get_numeric_value(child)
+        if val:
+            return parse_count(val)
+        for grandchild in child:
+            val = get_numeric_value(grandchild)
+            if val:
+                return parse_count(val)
+    return None
+
+
+def find_count_in_siblings(node, parent_map):
+    parent = parent_map.get(node)
+    if parent is None:
         return None
-
-    for pattern in metric_patterns[metric_name]:
-        match = pattern.search(text)
-        if not match:
-            continue
-
-        count = parse_count(match.group("count"))
+    children = list(parent)
+    try:
+        idx = children.index(node)
+    except ValueError:
+        return None
+    for sibling in children[idx + 1 : idx + 3]:
+        val = get_numeric_value(sibling)
+        if val:
+            return parse_count(val)
+        count = find_count_in_children(sibling)
         if count is not None:
             return count
-
+    # Also check preceding siblings (count might be above the icon)
+    for sibling in reversed(children[max(0, idx - 2) : idx]):
+        val = get_numeric_value(sibling)
+        if val:
+            return parse_count(val)
+        count = find_count_in_children(sibling)
+        if count is not None:
+            return count
     return None
+
+
+def find_count_in_parent(node, parent_map):
+    parent = parent_map.get(node)
+    if parent is None:
+        return None
+    count = find_count_in_children(parent)
+    if count is not None:
+        return count
+    return find_count_in_siblings(parent, parent_map)
 
 
 tree = ElementTree.parse(xml_path)
 root = tree.getroot()
+parent_map = {child: parent for parent in root.iter("node") for child in parent}
 
-payloads = []
+if debug:
+    print("=== UI DUMP (elements with content-desc or text) ===", file=sys.stderr)
+    for node in root.iter("node"):
+        cls = node.attrib.get("class", "")
+        desc = node.attrib.get("content-desc", "")
+        text = node.attrib.get("text", "")
+        bounds = node.attrib.get("bounds", "")
+        clickable = node.attrib.get("clickable", "")
+        if desc or text:
+            short_cls = cls.split(".")[-1] if cls else ""
+            print(
+                f"  {short_cls:<20} desc={desc:<50} text={text:<25} click={clickable} bounds={bounds}",
+                file=sys.stderr,
+            )
+    print("=== END UI DUMP ===", file=sys.stderr)
+
 metrics = {"likes": None, "comments": None, "shares": None}
 
 for node in root.iter("node"):
-    for attr_name in ("content-desc", "text"):
-        value = node.attrib.get(attr_name)
-        if value:
-            payloads.append(value)
+    desc = node.attrib.get("content-desc", "").strip()
+    text = node.attrib.get("text", "").strip()
 
-for payload in payloads:
-    for metric_name in metrics:
+    for metric_name, keyword_pat in METRIC_KEYWORDS.items():
         if metrics[metric_name] is not None:
             continue
 
-        count = extract_metric(payload, metric_name)
+        payload = None
+        if desc and keyword_pat.search(desc):
+            payload = desc
+        elif text and keyword_pat.search(text):
+            payload = text
+        else:
+            continue
+
+        # Try inline count first (e.g. "1234 likes, like video")
+        match = INLINE_COUNT.search(payload)
+        if match:
+            count = parse_count(match.group(1))
+            if count is not None:
+                metrics[metric_name] = count
+                if debug:
+                    print(f"  [match] {metric_name}={count} from inline '{payload}'", file=sys.stderr)
+                continue
+
+        # No inline count — look in children, siblings, then parent
+        count = find_count_in_children(node)
+        if count is None:
+            count = find_count_in_siblings(node, parent_map)
+        if count is None:
+            count = find_count_in_parent(node, parent_map)
         if count is not None:
             metrics[metric_name] = count
+            if debug:
+                print(f"  [match] {metric_name}={count} from tree near '{payload}'", file=sys.stderr)
 
 result = {
     "device_id": device_id,
