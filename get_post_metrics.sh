@@ -2,13 +2,15 @@
 
 set -euo pipefail
 
-# Scrape likes, comments, shares, and views for a TikTok post.
+# Scrape likes, comments, shares, views, and slideshow images for a TikTok post.
 #
 # Phase 1 (device): Opens the post URL on Android → UI dump → likes/comments/shares.
+#                    If slideshow detected, screenshots each slide → uploads to Supabase.
 # Phase 2 (Apify):  Calls clockworks/free-tiktok-scraper API → playCount → views.
 #
 # Requires:
 #   - APIFY_TOKEN env var (or pass --no-views to skip)
+#   - SUPABASE_URL + SUPABASE_KEY env vars (for slideshow image upload)
 #   - ADB with a connected Android device
 #
 # Usage: ./get_post_metrics.sh <post_url> [device_id] [--debug] [--no-views]
@@ -74,6 +76,39 @@ dump_ui() {
     adb -s "$device" pull /sdcard/ui_dump.xml "$output_file" >/dev/null
 }
 
+take_screenshot() {
+    local device=$1
+    local local_path=$2
+    adb -s "$device" shell screencap -p /sdcard/tiktok_slide.png >/dev/null
+    adb -s "$device" pull /sdcard/tiktok_slide.png "$local_path" >/dev/null
+    adb -s "$device" shell rm /sdcard/tiktok_slide.png >/dev/null 2>&1 || true
+}
+
+swipe_next_slide() {
+    local device=$1
+    adb -s "$device" shell input swipe 800 1000 200 1000 300
+    sleep 1.5
+}
+
+upload_to_supabase() {
+    local file_path=$1
+    local object_path=$2
+    local bucket=${3:-slideshow-screenshots}
+    local upload_url="${SUPABASE_URL}/storage/v1/object/${bucket}/${object_path}"
+    local http_code
+    http_code=$(curl -s -o /dev/null -w '%{http_code}' \
+        -X POST "$upload_url" \
+        -H "Authorization: Bearer ${SUPABASE_KEY}" \
+        -H "Content-Type: image/png" \
+        --data-binary "@${file_path}" 2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        echo "${SUPABASE_URL}/storage/v1/object/public/${bucket}/${object_path}"
+    else
+        echo "[warn] Supabase upload failed (HTTP $http_code) for $object_path" >&2
+        echo ""
+    fi
+}
+
 wake_device "$DEVICE_ID"
 
 # --- Phase 1: open post on device, extract likes/comments/shares ---
@@ -82,11 +117,60 @@ sleep 6
 
 POST_XML=$(mktemp)
 APIFY_JSON=$(mktemp)
-trap 'rm -f "$POST_XML" "$APIFY_JSON"' EXIT
+SLIDE_DIR=$(mktemp -d)
+trap 'rm -f "$POST_XML" "$APIFY_JSON"; rm -rf "$SLIDE_DIR"' EXIT
 
 dump_ui "$DEVICE_ID" "$POST_XML"
 
-# --- Phase 2: call Apify for view count (runs in parallel with nothing, but keeps code clean) ---
+# --- Slideshow detection & capture ---
+TOTAL_SLIDES=$(python3 -c "
+import re, sys
+from xml.etree import ElementTree
+tree = ElementTree.parse(sys.argv[1])
+pat = re.compile(r'(\d+)\s*/\s*(\d+)')
+for node in tree.getroot().iter('node'):
+    for attr in ('text', 'content-desc'):
+        val = node.attrib.get(attr, '').strip()
+        m = pat.fullmatch(val)
+        if m:
+            cur, tot = int(m.group(1)), int(m.group(2))
+            if 1 <= cur <= tot <= 100:
+                print(tot)
+                sys.exit(0)
+print(0)
+" "$POST_XML")
+
+IMAGE_URLS=""
+if [ "$TOTAL_SLIDES" -gt 1 ]; then
+    echo "[info] Slideshow detected: $TOTAL_SLIDES slides" >&2
+
+    # Extract post ID from URL for the storage path
+    POST_ID=$(echo "$RESOLVED_URL" | grep -oE '(video|photo)/[0-9]+' | grep -oE '[0-9]+' || echo "unknown")
+
+    if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_KEY:-}" ]; then
+        echo "[warn] SUPABASE_URL/SUPABASE_KEY not set — skipping slideshow upload" >&2
+    else
+        for i in $(seq 1 "$TOTAL_SLIDES"); do
+            SLIDE_PNG="$SLIDE_DIR/slide_${i}.png"
+            take_screenshot "$DEVICE_ID" "$SLIDE_PNG"
+
+            OBJECT_PATH="${POST_ID}/slide_${i}.png"
+            URL=$(upload_to_supabase "$SLIDE_PNG" "$OBJECT_PATH")
+            if [ -n "$URL" ]; then
+                IMAGE_URLS="${IMAGE_URLS}${IMAGE_URLS:+,}\"${URL}\""
+                if [ "$DEBUG" = true ]; then
+                    echo "[debug] Uploaded slide $i/$TOTAL_SLIDES → $URL" >&2
+                fi
+            fi
+
+            if [ "$i" -lt "$TOTAL_SLIDES" ]; then
+                swipe_next_slide "$DEVICE_ID"
+            fi
+        done
+    fi
+fi
+
+# --- Phase 2: call Apify for view count ---
 if [ "$NO_VIEWS" = false ]; then
     if [ -z "${APIFY_TOKEN:-}" ]; then
         echo "[warn] APIFY_TOKEN not set — skipping view count. Use --no-views to silence." >&2
@@ -118,7 +202,7 @@ if [ "$NO_VIEWS" = false ]; then
 fi
 
 # --- Parse everything ---
-python3 - "$POST_XML" "$APIFY_JSON" "$RESOLVED_URL" "$DEVICE_ID" "$DEBUG" <<'PY'
+python3 - "$POST_XML" "$APIFY_JSON" "$RESOLVED_URL" "$DEVICE_ID" "$DEBUG" "$IMAGE_URLS" <<'PY'
 import json
 import re
 import sys
@@ -129,6 +213,7 @@ apify_json_path = sys.argv[2]
 post_url = sys.argv[3]
 device_id = sys.argv[4]
 debug = sys.argv[5] == "true"
+raw_image_urls = sys.argv[6] if len(sys.argv) > 6 else ""
 
 # --- Shared helpers ---
 
@@ -330,6 +415,10 @@ elif debug:
 # Output
 # =====================================================================
 
+images = []
+if raw_image_urls:
+    images = [u.strip().strip('"') for u in raw_image_urls.split(",") if u.strip().strip('"')]
+
 result = {
     "device_id": device_id,
     "post_url": post_url,
@@ -337,6 +426,7 @@ result = {
     "comments": metrics["comments"],
     "shares": metrics["shares"],
     "views": metrics["views"],
+    "images": images,
 }
 
 print(json.dumps(result, indent=2))
