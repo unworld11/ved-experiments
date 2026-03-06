@@ -4,19 +4,24 @@ set -euo pipefail
 
 # Scrape likes, comments, shares, and views for a TikTok post.
 #
-# Phase 1: Opens the post URL → dumps UI → extracts likes/comments/shares.
-# Phase 2: Opens the creator's profile → dumps UI → finds the video in the
-#           grid by video ID → extracts the view count.
+# Phase 1 (device): Opens the post URL on Android → UI dump → likes/comments/shares.
+# Phase 2 (web):    Fetches the post page via ZenRows → parses embedded JSON → views.
 #
-# Usage: ./get_post_metrics.sh <post_url> [device_id] [--debug]
+# Requires:
+#   - ZENROWS_API_KEY env var (or pass --no-views to skip)
+#   - ADB with a connected Android device
+#
+# Usage: ./get_post_metrics.sh <post_url> [device_id] [--debug] [--no-views]
 
 DEBUG=false
+NO_VIEWS=false
 POST_URL=""
 DEVICE_ID=""
 
 for arg in "$@"; do
     case "$arg" in
         --debug) DEBUG=true ;;
+        --no-views) NO_VIEWS=true ;;
         *)
             if [ -z "$POST_URL" ]; then
                 POST_URL="$arg"
@@ -28,7 +33,7 @@ for arg in "$@"; do
 done
 
 if [ -z "$POST_URL" ]; then
-    echo "Usage: $0 <post_url> [device_id] [--debug]" >&2
+    echo "Usage: $0 <post_url> [device_id] [--debug] [--no-views]" >&2
     exit 1
 fi
 
@@ -41,7 +46,7 @@ if [ -z "$DEVICE_ID" ]; then
     exit 1
 fi
 
-# --- Resolve short URLs (vm.tiktok.com) to full URLs ---
+# --- Resolve short URLs (vm.tiktok.com / vt.tiktok.com) ---
 RESOLVED_URL="$POST_URL"
 if echo "$POST_URL" | grep -qE 'vm\.tiktok\.com|vt\.tiktok\.com'; then
     RESOLVED_URL=$(curl -Ls -o /dev/null -w '%{url_effective}' "$POST_URL" 2>/dev/null || echo "$POST_URL")
@@ -71,45 +76,46 @@ dump_ui() {
 
 wake_device "$DEVICE_ID"
 
-# --- Phase 1: open post, extract likes/comments/shares ---
+# --- Phase 1: open post on device, extract likes/comments/shares ---
 adb -s "$DEVICE_ID" shell am start -a android.intent.action.VIEW -d "$POST_URL" >/dev/null
 sleep 6
 
 POST_XML=$(mktemp)
-trap 'rm -f "$POST_XML" "${PROFILE_XML:-}"' EXIT
+VIEWS_HTML=$(mktemp)
+trap 'rm -f "$POST_XML" "$VIEWS_HTML"' EXIT
 
 dump_ui "$DEVICE_ID" "$POST_XML"
 
-# --- Phase 2: open profile, extract views ---
-PROFILE_XML=$(mktemp)
+# --- Phase 2: fetch post page via ZenRows for view count ---
+if [ "$NO_VIEWS" = false ]; then
+    if [ -z "${ZENROWS_API_KEY:-}" ]; then
+        echo "[warn] ZENROWS_API_KEY not set — skipping view count. Use --no-views to silence." >&2
+    else
+        ENCODED_URL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$RESOLVED_URL")
+        HTTP_CODE=$(curl -s -o "$VIEWS_HTML" -w '%{http_code}' \
+            "https://api.zenrows.com/v1/?apikey=${ZENROWS_API_KEY}&url=${ENCODED_URL}&js_render=true&premium_proxy=true&wait=5000" \
+            2>/dev/null || echo "000")
 
-# Parse username from the resolved URL  (https://www.tiktok.com/@user/video/123...)
-USERNAME=$(echo "$RESOLVED_URL" | grep -oE '/@[^/]+' | head -1 | tr -d '/@')
+        if [ "$DEBUG" = true ]; then
+            echo "[debug] ZenRows HTTP status: $HTTP_CODE" >&2
+            echo "[debug] ZenRows response size: $(wc -c < "$VIEWS_HTML") bytes" >&2
+        fi
 
-if [ -n "$USERNAME" ]; then
-    if [ "$DEBUG" = true ]; then
-        echo "[debug] Navigating to profile: @$USERNAME" >&2
+        if [ "$HTTP_CODE" != "200" ]; then
+            echo "[warn] ZenRows returned HTTP $HTTP_CODE — views may be unavailable" >&2
+        fi
     fi
-    adb -s "$DEVICE_ID" shell am start -a android.intent.action.VIEW \
-        -d "https://www.tiktok.com/@$USERNAME" >/dev/null
-    sleep 5
-    dump_ui "$DEVICE_ID" "$PROFILE_XML"
-else
-    if [ "$DEBUG" = true ]; then
-        echo "[debug] Could not parse username from URL, skipping profile phase" >&2
-    fi
-    PROFILE_XML=""
 fi
 
-# --- Parse both dumps ---
-python3 - "$POST_XML" "${PROFILE_XML:-}" "$RESOLVED_URL" "$DEVICE_ID" "$DEBUG" <<'PY'
+# --- Parse everything ---
+python3 - "$POST_XML" "$VIEWS_HTML" "$RESOLVED_URL" "$DEVICE_ID" "$DEBUG" <<'PY'
 import json
 import re
 import sys
 from xml.etree import ElementTree
 
 post_xml_path = sys.argv[1]
-profile_xml_path = sys.argv[2]
+views_html_path = sys.argv[2]
 post_url = sys.argv[3]
 device_id = sys.argv[4]
 debug = sys.argv[5] == "true"
@@ -117,7 +123,6 @@ debug = sys.argv[5] == "true"
 # --- Shared helpers ---
 
 INLINE_COUNT = re.compile(r"([\d.,]+\s*[KMBkmb]?)")
-
 SUFFIX_MULTIPLIERS = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
 
 
@@ -201,7 +206,7 @@ def dump_tree(root, label):
         text = node.attrib.get("text", "")
         rid = node.attrib.get("resource-id", "")
         bounds = node.attrib.get("bounds", "")
-        if desc or text or (rid and "cover" in rid):
+        if desc or text:
             short_cls = cls.split(".")[-1] if cls else ""
             rid_short = rid.split("/")[-1] if rid else ""
             print(
@@ -212,7 +217,7 @@ def dump_tree(root, label):
 
 
 # =====================================================================
-# Phase 1 — likes / comments / shares from the post page
+# Phase 1 — likes / comments / shares from the device UI dump
 # =====================================================================
 
 tree = ElementTree.parse(post_xml_path)
@@ -280,101 +285,64 @@ if any(metrics[k] is None for k in ("likes", "comments", "shares")):
 
 
 # =====================================================================
-# Phase 2 — views from the profile page grid
+# Phase 2 — views from ZenRows HTML (embedded JSON)
 # =====================================================================
 
-# Extract the post ID from the URL (numeric segment after /video/ or /photo/)
-video_id = None
-vid_match = re.search(r"/(?:video|photo)/(\d+)", post_url)
-if vid_match:
-    video_id = vid_match.group(1)
+try:
+    html = open(views_html_path).read()
+except Exception:
+    html = ""
 
-if profile_xml_path and video_id:
-    try:
-        ptree = ElementTree.parse(profile_xml_path)
-        proot = ptree.getroot()
-        pparent_map = {child: parent for parent in proot.iter("node") for child in parent}
+if html:
+    view_count = None
 
-        if debug:
-            dump_tree(proot, "profile page")
-
-        # Strategy 1: look for any node whose resource-id or content-desc
-        # contains the video ID, then grab the view count from its subtree.
-        found_via_id = False
-        for node in proot.iter("node"):
-            rid = node.attrib.get("resource-id", "")
-            desc = node.attrib.get("content-desc", "")
-            if video_id not in rid and video_id not in desc:
-                continue
-
+    # Strategy 1: __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON blob
+    rehydration_match = re.search(
+        r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    if rehydration_match:
+        try:
+            blob = json.loads(rehydration_match.group(1))
+            # Walk the nested structure to find statsV2 or stats with playCount
+            blob_str = json.dumps(blob)
+            play_match = re.search(r'"playCount"\s*:\s*(\d+)', blob_str)
+            if play_match:
+                view_count = int(play_match.group(1))
+                if debug:
+                    print(f"  [views] views={view_count} from __UNIVERSAL_DATA_FOR_REHYDRATION__", file=sys.stderr)
+        except json.JSONDecodeError as e:
             if debug:
-                print(f"  [views] matched video_id in node rid='{rid}' desc='{desc}'", file=sys.stderr)
+                print(f"  [views] JSON parse error in rehydration blob: {e}", file=sys.stderr)
 
-            # Walk up to the grid item container (up to 4 levels)
-            container = node
-            for _ in range(4):
-                parent = pparent_map.get(container)
-                if parent is None:
-                    break
-                container = parent
+    # Strategy 2: search raw HTML for playCount in any script tag
+    if view_count is None:
+        play_match = re.search(r'"playCount"\s*:\s*(\d+)', html)
+        if play_match:
+            view_count = int(play_match.group(1))
+            if debug:
+                print(f"  [views] views={view_count} from raw HTML playCount", file=sys.stderr)
 
-            # Find view count in the container's descendants
-            for child in container.iter("node"):
-                for attr in ("text", "content-desc"):
-                    val = child.attrib.get(attr, "").strip()
-                    if not val:
-                        continue
-                    if INLINE_COUNT.fullmatch(val):
-                        c = parse_count(val)
-                        if c is not None:
-                            metrics["views"] = c
-                            found_via_id = True
-                            if debug:
-                                print(f"  [views] views={c} from '{val}' in container", file=sys.stderr)
-                            break
-                    # Also match "X views" pattern
-                    vm = re.search(r"([\d.,]+\s*[KMBkmb]?)\s+views?\b", val, re.IGNORECASE)
-                    if vm:
-                        c = parse_count(vm.group(1))
-                        if c is not None:
-                            metrics["views"] = c
-                            found_via_id = True
-                            if debug:
-                                print(f"  [views] views={c} from '{val}' (views pattern)", file=sys.stderr)
-                            break
-                if found_via_id:
-                    break
-            if found_via_id:
-                break
+    # Strategy 3: og:video meta tag or similar
+    if view_count is None:
+        og_match = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html)
+        if og_match:
+            desc = og_match.group(1)
+            v = re.search(r"([\d.,]+[KMB]?)\s+(?:views|plays)", desc, re.IGNORECASE)
+            if v:
+                view_count = parse_count(v.group(1))
+                if debug:
+                    print(f"  [views] views={view_count} from og:description", file=sys.stderr)
 
-        # Strategy 2: if video ID wasn't in the tree, look for "X views"
-        # anywhere on the profile page (less precise but a usable fallback).
-        if metrics["views"] is None:
-            for node in proot.iter("node"):
-                for attr in ("content-desc", "text"):
-                    val = node.attrib.get(attr, "").strip()
-                    if not val:
-                        continue
-                    vm = re.search(r"([\d.,]+\s*[KMBkmb]?)\s+views?\b", val, re.IGNORECASE)
-                    if vm:
-                        c = parse_count(vm.group(1))
-                        if c is not None:
-                            metrics["views"] = c
-                            if debug:
-                                print(f"  [views] fallback views={c} from '{val}'", file=sys.stderr)
-                            break
-                if metrics["views"] is not None:
-                    break
-
-    except Exception as e:
-        if debug:
-            print(f"  [views] error parsing profile: {e}", file=sys.stderr)
+    if view_count is not None:
+        metrics["views"] = view_count
+    elif debug:
+        print("  [views] could not find playCount in ZenRows HTML", file=sys.stderr)
+        print(f"  [views] HTML length: {len(html)} chars", file=sys.stderr)
 
 elif debug:
-    if not video_id:
-        print("  [views] could not parse video_id from URL, skipping", file=sys.stderr)
-    if not profile_xml_path:
-        print("  [views] no profile dump available, skipping", file=sys.stderr)
+    print("  [views] no ZenRows HTML available", file=sys.stderr)
 
 
 # =====================================================================
