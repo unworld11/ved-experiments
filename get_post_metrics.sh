@@ -123,50 +123,70 @@ trap 'rm -f "$POST_XML" "$APIFY_JSON"; rm -rf "$SLIDE_DIR"' EXIT
 dump_ui "$DEVICE_ID" "$POST_XML"
 
 # --- Slideshow detection & capture ---
-TOTAL_SLIDES=$(python3 -c "
-import re, sys
+# Detect via "Photo" label in UI dump or /photo/ in resolved URL
+IS_SLIDESHOW=false
+if echo "$RESOLVED_URL" | grep -q '/photo/'; then
+    IS_SLIDESHOW=true
+elif python3 -c "
+import sys
 from xml.etree import ElementTree
 tree = ElementTree.parse(sys.argv[1])
-pat = re.compile(r'(\d+)\s*/\s*(\d+)')
 for node in tree.getroot().iter('node'):
-    for attr in ('text', 'content-desc'):
-        val = node.attrib.get(attr, '').strip()
-        m = pat.fullmatch(val)
-        if m:
-            cur, tot = int(m.group(1)), int(m.group(2))
-            if 1 <= cur <= tot <= 100:
-                print(tot)
-                sys.exit(0)
-print(0)
-" "$POST_XML")
+    if node.attrib.get('text', '').strip() == 'Photo':
+        sys.exit(0)
+sys.exit(1)
+" "$POST_XML" 2>/dev/null; then
+    IS_SLIDESHOW=true
+fi
 
 IMAGE_URLS=""
-if [ "$TOTAL_SLIDES" -gt 1 ]; then
-    echo "[info] Slideshow detected: $TOTAL_SLIDES slides" >&2
+MAX_SLIDES=35
 
-    # Extract post ID from URL for the storage path
+if [ "$IS_SLIDESHOW" = true ]; then
+    echo "[info] Slideshow post detected" >&2
+
     POST_ID=$(echo "$RESOLVED_URL" | grep -oE '(video|photo)/[0-9]+' | grep -oE '[0-9]+' || echo "unknown")
 
     if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_KEY:-}" ]; then
         echo "[warn] SUPABASE_URL/SUPABASE_KEY not set — skipping slideshow upload" >&2
     else
-        for i in $(seq 1 "$TOTAL_SLIDES"); do
+        # Screenshot slide 1 and record its hash to detect loop-back
+        SLIDE_PNG="$SLIDE_DIR/slide_1.png"
+        take_screenshot "$DEVICE_ID" "$SLIDE_PNG"
+        FIRST_HASH=$(md5 -q "$SLIDE_PNG" 2>/dev/null || md5sum "$SLIDE_PNG" | awk '{print $1}')
+
+        OBJECT_PATH="${POST_ID}/slide_1.png"
+        URL=$(upload_to_supabase "$SLIDE_PNG" "$OBJECT_PATH")
+        if [ -n "$URL" ]; then
+            IMAGE_URLS="\"${URL}\""
+            [ "$DEBUG" = true ] && echo "[debug] Uploaded slide 1 → $URL" >&2
+        fi
+
+        SLIDE_COUNT=1
+        for i in $(seq 2 "$MAX_SLIDES"); do
+            swipe_next_slide "$DEVICE_ID"
+
             SLIDE_PNG="$SLIDE_DIR/slide_${i}.png"
             take_screenshot "$DEVICE_ID" "$SLIDE_PNG"
+            CURRENT_HASH=$(md5 -q "$SLIDE_PNG" 2>/dev/null || md5sum "$SLIDE_PNG" | awk '{print $1}')
 
+            # If screenshot matches slide 1, we've looped — stop
+            if [ "$CURRENT_HASH" = "$FIRST_HASH" ]; then
+                [ "$DEBUG" = true ] && echo "[debug] Slide $i matches slide 1 — loop detected, done" >&2
+                rm -f "$SLIDE_PNG"
+                break
+            fi
+
+            SLIDE_COUNT=$i
             OBJECT_PATH="${POST_ID}/slide_${i}.png"
             URL=$(upload_to_supabase "$SLIDE_PNG" "$OBJECT_PATH")
             if [ -n "$URL" ]; then
-                IMAGE_URLS="${IMAGE_URLS}${IMAGE_URLS:+,}\"${URL}\""
-                if [ "$DEBUG" = true ]; then
-                    echo "[debug] Uploaded slide $i/$TOTAL_SLIDES → $URL" >&2
-                fi
-            fi
-
-            if [ "$i" -lt "$TOTAL_SLIDES" ]; then
-                swipe_next_slide "$DEVICE_ID"
+                IMAGE_URLS="${IMAGE_URLS},\"${URL}\""
+                [ "$DEBUG" = true ] && echo "[debug] Uploaded slide $i → $URL" >&2
             fi
         done
+
+        echo "[info] Captured $SLIDE_COUNT slides" >&2
     fi
 fi
 
