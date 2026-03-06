@@ -193,42 +193,60 @@ if debug:
 
 metrics = {"likes": None, "comments": None, "shares": None}
 
+# Inline patterns that match descriptions WITH an embedded count, e.g.
+#   "1234 likes, like video"  /  "34 comments, read or add comments"  /  "8 shares, share video"
+INLINE_METRIC_PATTERNS = {
+    "likes": re.compile(r"(?P<count>[\d.,]+\s*[KMBkmb]?)\s+likes?\b", re.IGNORECASE),
+    "comments": re.compile(r"(?P<count>[\d.,]+\s*[KMBkmb]?)\s+comments?\b", re.IGNORECASE),
+    "shares": re.compile(r"(?P<count>[\d.,]+\s*[KMBkmb]?)\s+shares?\b", re.IGNORECASE),
+}
+
+# --- Pass 1: reliable inline counts (count is embedded in the description) ---
 for node in root.iter("node"):
-    desc = node.attrib.get("content-desc", "").strip()
-    text = node.attrib.get("text", "").strip()
-
-    for metric_name, keyword_pat in METRIC_KEYWORDS.items():
-        if metrics[metric_name] is not None:
+    for attr_name in ("content-desc", "text"):
+        payload = node.attrib.get(attr_name, "").strip()
+        if not payload:
             continue
 
-        payload = None
-        if desc and keyword_pat.search(desc):
-            payload = desc
-        elif text and keyword_pat.search(text):
-            payload = text
-        else:
-            continue
+        for metric_name, pattern in INLINE_METRIC_PATTERNS.items():
+            if metrics[metric_name] is not None:
+                continue
 
-        # Try inline count first (e.g. "1234 likes, like video")
-        match = INLINE_COUNT.search(payload)
-        if match:
-            count = parse_count(match.group(1))
+            match = pattern.search(payload)
+            if match:
+                count = parse_count(match.group("count"))
+                if count is not None:
+                    metrics[metric_name] = count
+                    if debug:
+                        print(f"  [pass1] {metric_name}={count} from '{payload}'", file=sys.stderr)
+
+# --- Pass 2: for still-missing metrics, find the keyword node and tree-walk ---
+if any(v is None for v in metrics.values()):
+    for node in root.iter("node"):
+        desc = node.attrib.get("content-desc", "").strip()
+        text = node.attrib.get("text", "").strip()
+
+        for metric_name, keyword_pat in METRIC_KEYWORDS.items():
+            if metrics[metric_name] is not None:
+                continue
+
+            payload = None
+            if desc and keyword_pat.search(desc):
+                payload = desc
+            elif text and keyword_pat.search(text):
+                payload = text
+            else:
+                continue
+
+            count = find_count_in_children(node)
+            if count is None:
+                count = find_count_in_siblings(node, parent_map)
+            if count is None:
+                count = find_count_in_parent(node, parent_map)
             if count is not None:
                 metrics[metric_name] = count
                 if debug:
-                    print(f"  [match] {metric_name}={count} from inline '{payload}'", file=sys.stderr)
-                continue
-
-        # No inline count — look in children, siblings, then parent
-        count = find_count_in_children(node)
-        if count is None:
-            count = find_count_in_siblings(node, parent_map)
-        if count is None:
-            count = find_count_in_parent(node, parent_map)
-        if count is not None:
-            metrics[metric_name] = count
-            if debug:
-                print(f"  [match] {metric_name}={count} from tree near '{payload}'", file=sys.stderr)
+                    print(f"  [pass2] {metric_name}={count} from tree near '{payload}'", file=sys.stderr)
 
 result = {
     "device_id": device_id,
