@@ -95,18 +95,22 @@ upload_to_supabase() {
     local object_path=$2
     local bucket=${3:-slideshow-screenshots}
     local upload_url="${SUPABASE_URL}/storage/v1/object/${bucket}/${object_path}"
+    local resp_body
+    resp_body=$(mktemp)
     local http_code
-    http_code=$(curl -s -o /dev/null -w '%{http_code}' \
+    http_code=$(curl -s -o "$resp_body" -w '%{http_code}' \
         -X POST "$upload_url" \
         -H "Authorization: Bearer ${SUPABASE_KEY}" \
+        -H "apikey: ${SUPABASE_KEY}" \
         -H "Content-Type: image/png" \
         --data-binary "@${file_path}" 2>/dev/null || echo "000")
     if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
         echo "${SUPABASE_URL}/storage/v1/object/public/${bucket}/${object_path}"
     else
-        echo "[warn] Supabase upload failed (HTTP $http_code) for $object_path" >&2
+        echo "[warn] Supabase upload failed (HTTP $http_code) for $object_path: $(cat "$resp_body")" >&2
         echo ""
     fi
+    rm -f "$resp_body"
 }
 
 wake_device "$DEVICE_ID"
