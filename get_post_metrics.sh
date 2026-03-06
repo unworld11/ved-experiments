@@ -5,10 +5,10 @@ set -euo pipefail
 # Scrape likes, comments, shares, and views for a TikTok post.
 #
 # Phase 1 (device): Opens the post URL on Android → UI dump → likes/comments/shares.
-# Phase 2 (web):    Fetches the post page via ZenRows → parses embedded JSON → views.
+# Phase 2 (Apify):  Calls clockworks/free-tiktok-scraper API → playCount → views.
 #
 # Requires:
-#   - ZENROWS_API_KEY env var (or pass --no-views to skip)
+#   - APIFY_TOKEN env var (or pass --no-views to skip)
 #   - ADB with a connected Android device
 #
 # Usage: ./get_post_metrics.sh <post_url> [device_id] [--debug] [--no-views]
@@ -81,41 +81,51 @@ adb -s "$DEVICE_ID" shell am start -a android.intent.action.VIEW -d "$POST_URL" 
 sleep 6
 
 POST_XML=$(mktemp)
-VIEWS_HTML=$(mktemp)
-trap 'rm -f "$POST_XML" "$VIEWS_HTML"' EXIT
+APIFY_JSON=$(mktemp)
+trap 'rm -f "$POST_XML" "$APIFY_JSON"' EXIT
 
 dump_ui "$DEVICE_ID" "$POST_XML"
 
-# --- Phase 2: fetch post page via ZenRows for view count ---
+# --- Phase 2: call Apify for view count (runs in parallel with nothing, but keeps code clean) ---
 if [ "$NO_VIEWS" = false ]; then
-    if [ -z "${ZENROWS_API_KEY:-}" ]; then
-        echo "[warn] ZENROWS_API_KEY not set — skipping view count. Use --no-views to silence." >&2
+    if [ -z "${APIFY_TOKEN:-}" ]; then
+        echo "[warn] APIFY_TOKEN not set — skipping view count. Use --no-views to silence." >&2
     else
-        ENCODED_URL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$RESOLVED_URL")
-        HTTP_CODE=$(curl -s -o "$VIEWS_HTML" -w '%{http_code}' \
-            "https://api.zenrows.com/v1/?apikey=${ZENROWS_API_KEY}&url=${ENCODED_URL}&js_render=true&premium_proxy=true&wait=5000" \
+        if [ "$DEBUG" = true ]; then
+            echo "[debug] Calling Apify clockworks/free-tiktok-scraper..." >&2
+        fi
+
+        # Start the actor run synchronously (waits up to 120s)
+        HTTP_CODE=$(curl -s -o "$APIFY_JSON" -w '%{http_code}' \
+            -X POST "https://api.apify.com/v2/acts/clockworks~free-tiktok-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=120" \
+            -H "Content-Type: application/json" \
+            -d "{\"postURLs\": [\"${RESOLVED_URL}\"], \"resultsPerPage\": 1}" \
             2>/dev/null || echo "000")
 
         if [ "$DEBUG" = true ]; then
-            echo "[debug] ZenRows HTTP status: $HTTP_CODE" >&2
-            echo "[debug] ZenRows response size: $(wc -c < "$VIEWS_HTML") bytes" >&2
+            echo "[debug] Apify HTTP status: $HTTP_CODE" >&2
+            echo "[debug] Apify response size: $(wc -c < "$APIFY_JSON") bytes" >&2
         fi
 
         if [ "$HTTP_CODE" != "200" ]; then
-            echo "[warn] ZenRows returned HTTP $HTTP_CODE — views may be unavailable" >&2
+            echo "[warn] Apify returned HTTP $HTTP_CODE — views may be unavailable" >&2
+            if [ "$DEBUG" = true ]; then
+                head -c 500 "$APIFY_JSON" >&2
+                echo >&2
+            fi
         fi
     fi
 fi
 
 # --- Parse everything ---
-python3 - "$POST_XML" "$VIEWS_HTML" "$RESOLVED_URL" "$DEVICE_ID" "$DEBUG" <<'PY'
+python3 - "$POST_XML" "$APIFY_JSON" "$RESOLVED_URL" "$DEVICE_ID" "$DEBUG" <<'PY'
 import json
 import re
 import sys
 from xml.etree import ElementTree
 
 post_xml_path = sys.argv[1]
-views_html_path = sys.argv[2]
+apify_json_path = sys.argv[2]
 post_url = sys.argv[3]
 device_id = sys.argv[4]
 debug = sys.argv[5] == "true"
@@ -285,91 +295,35 @@ if any(metrics[k] is None for k in ("likes", "comments", "shares")):
 
 
 # =====================================================================
-# Phase 2 — views from ZenRows HTML (embedded JSON)
+# Phase 2 — views (+ cross-check) from Apify JSON
 # =====================================================================
 
 try:
-    html = open(views_html_path).read()
+    apify_data = json.load(open(apify_json_path))
 except Exception:
-    html = ""
+    apify_data = []
 
-if html:
-    view_count = None
+if isinstance(apify_data, list) and len(apify_data) > 0:
+    item = apify_data[0]
 
-    # All known field names TikTok uses for view/play count
-    VIEW_KEYS = re.compile(
-        r'"(?:playCount|play_count|viewCount|view_count|plays|views)"\s*:\s*"?(\d+)"?'
-    )
-
-    # Known JSON blob script IDs in TikTok pages
-    BLOB_PATTERNS = [
-        ("__UNIVERSAL_DATA_FOR_REHYDRATION__",
-         re.compile(r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', re.DOTALL)),
-        ("SIGI_STATE",
-         re.compile(r'<script[^>]*id="SIGI_STATE"[^>]*>(.*?)</script>', re.DOTALL)),
-        ("__NEXT_DATA__",
-         re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)),
-        ("webapp.video-detail",
-         re.compile(r'"webapp\.video-detail"\s*:\s*(\{.*?\})\s*(?:,\s*"webapp\.|</script>)', re.DOTALL)),
-    ]
-
-    # Strategy 1: extract from known JSON blobs
-    for blob_name, blob_pat in BLOB_PATTERNS:
-        if view_count is not None:
-            break
-        blob_match = blob_pat.search(html)
+    play_count = item.get("playCount")
+    if play_count is not None:
+        metrics["views"] = int(play_count)
         if debug:
-            print(f"  [views] {blob_name}: {'found' if blob_match else 'not found'}", file=sys.stderr)
-        if not blob_match:
-            continue
-        blob_text = blob_match.group(1)
-        key_match = VIEW_KEYS.search(blob_text)
-        if key_match:
-            view_count = int(key_match.group(1))
-            if debug:
-                print(f"  [views] views={view_count} from {blob_name}", file=sys.stderr)
+            print(f"  [views] views={metrics['views']} from Apify playCount", file=sys.stderr)
 
-    # Strategy 2: search ALL script tags for the view key
-    if view_count is None:
-        for script_match in re.finditer(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
-            key_match = VIEW_KEYS.search(script_match.group(1))
-            if key_match:
-                view_count = int(key_match.group(1))
-                if debug:
-                    print(f"  [views] views={view_count} from script tag", file=sys.stderr)
-                break
-
-    # Strategy 3: search entire raw HTML (last resort)
-    if view_count is None:
-        key_match = VIEW_KEYS.search(html)
-        if key_match:
-            view_count = int(key_match.group(1))
-            if debug:
-                print(f"  [views] views={view_count} from raw HTML", file=sys.stderr)
-
-    # Strategy 4: og:description meta tag
-    if view_count is None:
-        og_match = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html)
-        if og_match:
-            desc = og_match.group(1)
-            v = re.search(r"([\d.,]+[KMB]?)\s+(?:views|plays|Likes)", desc, re.IGNORECASE)
-            if v:
-                view_count = parse_count(v.group(1))
-                if debug:
-                    print(f"  [views] views={view_count} from og:description '{desc[:80]}'", file=sys.stderr)
-
-    if view_count is not None:
-        metrics["views"] = view_count
-    elif debug:
-        print("  [views] could not find view count in ZenRows HTML", file=sys.stderr)
-        print(f"  [views] HTML length: {len(html)} chars", file=sys.stderr)
-        # Show what JSON-like keys ARE present for diagnosis
-        found_keys = set(re.findall(r'"(\w*[Cc]ount\w*)"', html[:50000]))
-        if found_keys:
-            print(f"  [views] count-like keys found: {sorted(found_keys)}", file=sys.stderr)
+    # Cross-check: log Apify values alongside device values for debugging
+    if debug:
+        apify_metrics = {
+            "likes": item.get("diggCount"),
+            "comments": item.get("commentCount"),
+            "shares": item.get("shareCount"),
+            "saves": item.get("collectCount"),
+        }
+        print(f"  [apify] full metrics: {apify_metrics}", file=sys.stderr)
 
 elif debug:
-    print("  [views] no ZenRows HTML available", file=sys.stderr)
+    print("  [views] no Apify data available", file=sys.stderr)
 
 
 # =====================================================================
